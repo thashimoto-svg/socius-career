@@ -1,0 +1,20 @@
+{
+  "name": "socius-career",
+  "version": "0.1.0",
+  "private": true,
+  "description": "就活生向け対話型自己分析AIアプリ",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/web",
+    "build": "npm run build --workspace apps/web",
+    "start": "npm run start --workspace apps/web",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\""
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
