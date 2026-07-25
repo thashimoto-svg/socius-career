@@ -1,26 +1,66 @@
 @import "tailwindcss";
 
+/* Design tokens — mirror of lib/theme.ts (T). Kept in sync by hand. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --sc-bg: #f4f6f5;
+  --sc-paper: #ffffff;
+  --sc-ink: #22302f;
+  --sc-sub: #6c7a78;
+  --sc-line: #e2e8e6;
+  --sc-primary: #175e63;
+  --sc-primary-soft: #e4efee;
+  --sc-gold: #c8963e;
+  --sc-gold-soft: #f8f1e3;
+  --sc-karakuchi: #8a3b2e;
+  --sc-karakuchi-soft: #f7eae6;
 }
 
+/* Expose the next/font families (set on <html>) to Tailwind's theme. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-sc-sans);
+  --font-display: var(--font-sc-display);
+  --color-sc-bg: var(--sc-bg);
+  --color-sc-paper: var(--sc-paper);
+  --color-sc-ink: var(--sc-ink);
+  --color-sc-sub: var(--sc-sub);
+  --color-sc-line: var(--sc-line);
+  --color-sc-primary: var(--sc-primary);
+  --color-sc-gold: var(--sc-gold);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--sc-bg);
+  color: var(--sc-ink);
+  font-family: var(--font-sc-sans), "Zen Kaku Gothic New", sans-serif;
+}
+
+/* Shippori Mincho — used for display headings and student's own words. */
+.sc-display {
+  font-family: var(--font-sc-display), "Shippori Mincho", serif;
+}
+
+/* Gentle entrance used by bubbles, cards, and step transitions. */
+.sc-fade {
+  animation: scfade 0.35s ease;
+}
+
+@keyframes scfade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sc-fade {
+    animation: none;
+  }
 }
