@@ -1,0 +1,12 @@
+{
+  "name": "@socius/prompts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "壁打ちのシステムプロンプトと STAR 抽出プロンプト",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./modes": "./modes/index.ts",
+    "./extract": "./extract/index.ts"
+  }
+}

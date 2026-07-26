@@ -46,7 +46,10 @@ export default function JibunshiPage() {
     };
   }, [user]);
 
-  const handleSave = async (id: string, patch: Partial<Episode>) => {
+  const handleSave = async (
+    id: string,
+    patch: { title: string; star: Star; learn: string },
+  ) => {
     if (!user) return;
     // Optimistic: the student just typed these words, so showing them straight
     // away is more honest than a spinner over their own text.
@@ -54,11 +57,7 @@ export default function JibunshiPage() {
       rows?.map((e) => (e.id === id ? { ...e, ...patch } : e)) ?? rows,
     );
     setEditingId(null);
-    await updateEpisode(user.uid, id, {
-      title: patch.title,
-      star: patch.star,
-      learn: patch.learn,
-    });
+    await updateEpisode(user.uid, id, patch);
   };
 
   const handleDelete = async (id: string) => {
