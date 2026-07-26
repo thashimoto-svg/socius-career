@@ -4,7 +4,7 @@ import { T } from "@/lib/theme";
 
 // Sessions are saved automatically; tapping one resumes it, so a conversation
 // is never consumed in a single sitting.
-// TODO(supabase): read from the `sessions` table and link to /chat/[id].
+// TODO(firebase): read from the `sessions` collection and link to /chat/[id].
 export default function HistoryPage() {
   return (
     <div style={{ padding: "20px 16px" }}>

@@ -31,7 +31,7 @@ export default function OnboardingPage() {
       return next.includes(v) ? next.filter((x) => x !== v) : [...next, v];
     });
 
-  // TODO(supabase): persist { grade, club, inds } to the onboarding table and
+  // TODO(firebase): persist { grade, club, inds } to users/{uid} and
   // feed it into the壁打ち system prompt so the student never writes a prompt.
   const steps: Step[] = useMemo(
     () => [

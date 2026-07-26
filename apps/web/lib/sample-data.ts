@@ -1,9 +1,9 @@
 /**
  * Placeholder sample data for the UI prototype.
  *
- * TODO(supabase): replace these constants with queries once the database is
- * linked. Sessions come from a `sessions` table; episodes from an `episodes`
- * table structured as STAR + 学び + 感情, keyed to the signed-in profile.
+ * TODO(firebase): replace these constants with queries once Firestore is
+ * wired up. Sessions come from the `sessions` collection; episodes from
+ * `episodes`, structured as STAR + 学び + 感情, keyed to the signed-in user.
  * See docs/specs/ui-notes.md for the ownership / structuring requirements.
  */
 

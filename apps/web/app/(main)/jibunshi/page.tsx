@@ -13,7 +13,7 @@ const STAR_LABELS: { key: keyof Star; label: string }[] = [
 
 // Every card holds the student's own words, structured as STAR + 学び + 感情 —
 // never a loose blob of text, and never rewritten into the AI's voice.
-// TODO(supabase): read from the `episodes` table; wire 編集 to an edit route
+// TODO(firebase): read from the `episodes` collection; wire 編集 to an edit route
 // and add Markdown export in v0.2.
 export default function JibunshiPage() {
   const [openId, setOpenId] = useState<string | null>(EPISODES[0]?.id ?? null);

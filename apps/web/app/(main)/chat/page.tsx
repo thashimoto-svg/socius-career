@@ -89,7 +89,7 @@ export default function ChatPage() {
           background: T.paper,
         }}
       >
-        {/* TODO(supabase): the theme is guided on the first session, then drawn
+        {/* TODO(firebase): the theme is guided on the first session, then drawn
             from the student's onboarding answers and past episodes. */}
         <div style={{ fontSize: 11, color: T.sub, marginBottom: 6 }}>
           今日のテーマ: 部活を続けた理由
