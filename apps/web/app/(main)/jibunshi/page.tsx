@@ -1,7 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { EPISODES, type Star } from "@/lib/sample-data";
+import { useEffect, useState } from "react";
+import { useAuth } from "@/lib/firebase/auth-context";
+import {
+  deleteEpisode,
+  listEpisodes,
+  updateEpisode,
+} from "@/lib/firebase/episodes";
+import type { Episode, Star } from "@/lib/firebase/schema";
 import { T } from "@/lib/theme";
 
 const STAR_LABELS: { key: keyof Star; label: string }[] = [
@@ -13,10 +19,54 @@ const STAR_LABELS: { key: keyof Star; label: string }[] = [
 
 // Every card holds the student's own words, structured as STAR + 学び + 感情 —
 // never a loose blob of text, and never rewritten into the AI's voice.
-// TODO(firebase): read from the `episodes` collection; wire 編集 to an edit route
-// and add Markdown export in v0.2.
+// TODO(v0.2): Markdown export.
 export default function JibunshiPage() {
-  const [openId, setOpenId] = useState<string | null>(EPISODES[0]?.id ?? null);
+  const { user } = useAuth();
+  const [episodes, setEpisodes] = useState<Episode[] | null>(null);
+  const [error, setError] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    listEpisodes(user.uid)
+      .then((rows) => {
+        if (cancelled) return;
+        setEpisodes(rows);
+        setOpenId(rows[0]?.id ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const handleSave = async (id: string, patch: Partial<Episode>) => {
+    if (!user) return;
+    // Optimistic: the student just typed these words, so showing them straight
+    // away is more honest than a spinner over their own text.
+    setEpisodes((rows) =>
+      rows?.map((e) => (e.id === id ? { ...e, ...patch } : e)) ?? rows,
+    );
+    setEditingId(null);
+    await updateEpisode(user.uid, id, {
+      title: patch.title,
+      star: patch.star,
+      learn: patch.learn,
+    });
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!user) return;
+    if (!window.confirm("このエピソードを削除しますか? 元に戻せません。")) return;
+    setEpisodes((rows) => rows?.filter((e) => e.id !== id) ?? rows);
+    await deleteEpisode(user.uid, id);
+  };
 
   return (
     <div style={{ padding: "20px 16px" }}>
@@ -27,7 +77,27 @@ export default function JibunshiPage() {
         ここにある言葉は、すべてあなた自身が話したことです。
       </p>
 
-      {EPISODES.map((e) => {
+      {error && (
+        <div role="alert" style={{ fontSize: 12, color: T.karakuchi, lineHeight: 1.9 }}>
+          エピソードを読み込めませんでした。ページを再読み込みしてください。
+        </div>
+      )}
+
+      {!error && episodes === null && (
+        <div style={{ fontSize: 12, color: T.sub }}>読み込んでいます…</div>
+      )}
+
+      {!error && episodes?.length === 0 && (
+        <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.9 }}>
+          まだエピソードはありません。
+          <br />
+          壁打ちを終えるときに「エピソードとして残す」を押すと、
+          <br />
+          話した言葉がここに STAR で並びます。
+        </div>
+      )}
+
+      {episodes?.map((e) => {
         const isOpen = openId === e.id;
         const bodyId = `episode-${e.id}`;
         return (
@@ -76,7 +146,15 @@ export default function JibunshiPage() {
               </div>
             </button>
 
-            {isOpen && (
+            {isOpen && editingId === e.id && (
+              <EpisodeEditor
+                episode={e}
+                onCancel={() => setEditingId(null)}
+                onSave={(patch) => handleSave(e.id, patch)}
+              />
+            )}
+
+            {isOpen && editingId !== e.id && (
               <div id={bodyId} className="sc-fade" style={{ padding: "0 15px 13px" }}>
                 {STAR_LABELS.map(({ key, label }) => (
                   <div key={key} style={{ display: "flex", gap: 10, marginBottom: 8 }}>
@@ -120,6 +198,7 @@ export default function JibunshiPage() {
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
                     type="button"
+                    onClick={() => setEditingId(e.id)}
                     style={{
                       flex: 1,
                       padding: "8px 0",
@@ -133,6 +212,23 @@ export default function JibunshiPage() {
                     }}
                   >
                     編集する
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(e.id)}
+                    style={{
+                      flex: 1,
+                      padding: "8px 0",
+                      borderRadius: 9,
+                      border: `1.5px solid ${T.line}`,
+                      background: T.paper,
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      color: T.karakuchi,
+                      cursor: "pointer",
+                    }}
+                  >
+                    削除する
                   </button>
                   <button
                     type="button"
@@ -156,6 +252,110 @@ export default function JibunshiPage() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+const fieldStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: `1.5px solid ${T.line}`,
+  background: T.bg,
+  color: T.ink,
+  fontSize: 12.5,
+  lineHeight: 1.7,
+  fontFamily: "inherit",
+  resize: "vertical",
+};
+
+/**
+ * Inline editing rather than a separate route: the student is correcting a
+ * sentence they can see, and losing the surrounding card would make the edit
+ * feel like filling in a form about themselves.
+ */
+function EpisodeEditor({
+  episode,
+  onCancel,
+  onSave,
+}: {
+  episode: Episode;
+  onCancel: () => void;
+  onSave: (patch: { title: string; star: Star; learn: string }) => void;
+}) {
+  const [title, setTitle] = useState(episode.title);
+  const [star, setStar] = useState<Star>(episode.star);
+  const [learn, setLearn] = useState(episode.learn);
+
+  return (
+    <div className="sc-fade" style={{ padding: "0 15px 13px" }}>
+      <label style={{ display: "block", fontSize: 10, color: T.sub, marginBottom: 4 }}>
+        タイトル
+      </label>
+      <input value={title} onChange={(ev) => setTitle(ev.target.value)} style={fieldStyle} />
+
+      {STAR_LABELS.map(({ key, label }) => (
+        <div key={key} style={{ marginTop: 10 }}>
+          <label style={{ display: "block", fontSize: 10, color: T.sub, marginBottom: 4 }}>
+            {key}・{label}
+          </label>
+          <textarea
+            rows={2}
+            value={star[key]}
+            onChange={(ev) => setStar((s) => ({ ...s, [key]: ev.target.value }))}
+            style={fieldStyle}
+          />
+        </div>
+      ))}
+
+      <div style={{ marginTop: 10 }}>
+        <label style={{ display: "block", fontSize: 10, color: T.sub, marginBottom: 4 }}>
+          学び ── 自分の言葉で
+        </label>
+        <textarea
+          rows={2}
+          value={learn}
+          onChange={(ev) => setLearn(ev.target.value)}
+          style={fieldStyle}
+        />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={() => onSave({ title, star, learn })}
+          style={{
+            flex: 1,
+            padding: "8px 0",
+            borderRadius: 9,
+            border: "none",
+            background: T.primary,
+            color: "#fff",
+            fontSize: 11.5,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          保存する
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            flex: 1,
+            padding: "8px 0",
+            borderRadius: 9,
+            border: `1.5px solid ${T.line}`,
+            background: T.paper,
+            fontSize: 11.5,
+            fontWeight: 700,
+            color: T.sub,
+            cursor: "pointer",
+          }}
+        >
+          やめる
+        </button>
+      </div>
     </div>
   );
 }

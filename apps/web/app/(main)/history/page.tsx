@@ -1,21 +1,66 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { SESSIONS } from "@/lib/sample-data";
+import { useAuth } from "@/lib/firebase/auth-context";
+import { listSessions } from "@/lib/firebase/sessions";
+import { formatShortDate, type Session } from "@/lib/firebase/schema";
 import { T } from "@/lib/theme";
 
 // Sessions are saved automatically; tapping one resumes it, so a conversation
 // is never consumed in a single sitting.
-// TODO(firebase): read from the `sessions` collection and link to /chat/[id].
 export default function HistoryPage() {
+  const { user } = useAuth();
+  const [sessions, setSessions] = useState<Session[] | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    listSessions(user.uid)
+      .then((rows) => {
+        if (!cancelled) setSessions(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   return (
     <div style={{ padding: "20px 16px" }}>
       <h1 className="sc-display" style={{ fontSize: 18, fontWeight: 700, marginBottom: 14 }}>
         壁打ちの記録
       </h1>
 
-      {SESSIONS.map((s) => (
+      {error && (
+        <div role="alert" style={{ fontSize: 12, color: T.karakuchi, lineHeight: 1.9 }}>
+          記録を読み込めませんでした。ページを再読み込みしてください。
+        </div>
+      )}
+
+      {!error && sessions === null && (
+        <div style={{ fontSize: 12, color: T.sub }}>読み込んでいます…</div>
+      )}
+
+      {!error && sessions?.length === 0 && (
+        <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.9 }}>
+          まだ記録はありません。
+          <br />
+          <Link href="/chat" style={{ color: T.primary, fontWeight: 700 }}>
+            最初の壁打ちを始める
+          </Link>
+        </div>
+      )}
+
+      {sessions?.map((s) => (
         <Link
           key={s.id}
-          href="/chat"
+          href={`/chat?s=${s.id}`}
           className="sc-fade"
           style={{
             display: "block",
@@ -29,11 +74,11 @@ export default function HistoryPage() {
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
             <div style={{ fontSize: 13.5, fontWeight: 700 }}>{s.title}</div>
-            <div style={{ fontSize: 11, color: T.sub }}>{s.date}</div>
+            <div style={{ fontSize: 11, color: T.sub }}>{formatShortDate(s.updatedAt)}</div>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 7, alignItems: "center" }}>
-            <span style={{ fontSize: 10.5, color: T.sub }}>{s.turns}往復</span>
-            {s.episodes > 0 ? (
+            <span style={{ fontSize: 10.5, color: T.sub }}>{s.turnCount}往復</span>
+            {s.episodeCount > 0 ? (
               <span
                 style={{
                   fontSize: 10.5,
@@ -44,7 +89,7 @@ export default function HistoryPage() {
                   fontWeight: 700,
                 }}
               >
-                自分史に{s.episodes}件
+                自分史に{s.episodeCount}件
               </span>
             ) : (
               <span
@@ -57,7 +102,7 @@ export default function HistoryPage() {
                   fontWeight: 700,
                 }}
               >
-                途中から再開できます
+                {s.status === "closed" ? "終了しました" : "途中から再開できます"}
               </span>
             )}
           </div>

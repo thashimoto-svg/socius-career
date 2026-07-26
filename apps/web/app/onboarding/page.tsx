@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Chip } from "@/components/Chip";
+import { useAuth } from "@/lib/firebase/auth-context";
+import { saveOnboarding } from "@/lib/firebase/users";
 import { T } from "@/lib/theme";
 
 type Step = {
@@ -18,10 +20,16 @@ const UNDECIDED = "まだ決まっていない";
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const { user, userDoc, applyOnboarding } = useAuth();
   const [step, setStep] = useState(0);
-  const [grade, setGrade] = useState("大学3年");
-  const [club, setClub] = useState("体育会系の部活");
-  const [inds, setInds] = useState<string[]>([UNDECIDED]);
+  // Prefilled from a previous run, so revisiting this screen to change an
+  // answer shows what the student picked last time rather than the defaults.
+  const saved = userDoc?.profile;
+  const [grade, setGrade] = useState(saved?.grade ?? "大学3年");
+  const [club, setClub] = useState(saved?.club ?? "体育会系の部活");
+  const [inds, setInds] = useState<string[]>(saved?.industries ?? [UNDECIDED]);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const toggleInd = (v: string) =>
     setInds((s) => {
@@ -31,8 +39,6 @@ export default function OnboardingPage() {
       return next.includes(v) ? next.filter((x) => x !== v) : [...next, v];
     });
 
-  // TODO(firebase): persist { grade, club, inds } to users/{uid} and
-  // feed it into the壁打ち system prompt so the student never writes a prompt.
   const steps: Step[] = useMemo(
     () => [
       {
@@ -64,12 +70,27 @@ export default function OnboardingPage() {
 
   const done = step >= steps.length;
 
-  const advance = () => {
-    if (done) {
-      router.push("/chat");
+  // The answers are what the 壁打ち opens with, so they have to be stored before
+  // the student lands on /chat — otherwise the first question arrives with no
+  // context and the 「プロンプトを考える必要はありません」 promise breaks.
+  const advance = async () => {
+    if (!done) {
+      setStep((s) => Math.min(s + 1, steps.length));
       return;
     }
-    setStep((s) => Math.min(s + 1, steps.length));
+    if (!user || saving) return;
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const profile = { grade, club, industries: inds };
+      await saveOnboarding(user.uid, profile);
+      applyOnboarding(profile);
+      router.replace("/chat");
+    } catch {
+      setSaveError("保存できませんでした。通信状況を確認して、もう一度お試しください。");
+      setSaving(false);
+    }
   };
 
   return (
@@ -127,9 +148,27 @@ export default function OnboardingPage() {
         </div>
       )}
 
+      {saveError && (
+        <div
+          role="alert"
+          style={{
+            marginTop: 12,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: T.karakuchiSoft,
+            color: T.karakuchi,
+            fontSize: 12,
+            lineHeight: 1.7,
+          }}
+        >
+          {saveError}
+        </div>
+      )}
+
       <button
         type="button"
         onClick={advance}
+        disabled={saving}
         style={{
           marginTop: 16,
           padding: "13px 0",
@@ -139,10 +178,11 @@ export default function OnboardingPage() {
           color: "#fff",
           fontSize: 14,
           fontWeight: 700,
-          cursor: "pointer",
+          opacity: saving ? 0.6 : 1,
+          cursor: saving ? "default" : "pointer",
         }}
       >
-        {done ? "壁打ちを始める" : "次へ"}
+        {done ? (saving ? "保存しています…" : "壁打ちを始める") : "次へ"}
       </button>
       {step > 0 && !done && (
         <button

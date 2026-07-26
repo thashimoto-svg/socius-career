@@ -1,10 +1,76 @@
 rules_version = '2';
 
-// Phase 1 placeholder: deny everything by default.
-// Phase 5 replaces this with the real per-user rules for
-// users/{uid} + sessions + messages + episodes.
+// Everything a student writes lives under their own users/{uid} document, so
+// ownership is the whole access model: you can reach a document if and only if
+// the uid in its path is yours. There is no sharing, no admin read, and no
+// public surface — 「本人以外は読めません」 on the login screen is enforced here,
+// not just promised in copy.
+//
+// Size caps exist so a compromised or buggy client cannot turn a student's
+// document tree into free storage; they are deliberately far above anything
+// the UI can produce.
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        && incoming().keys().hasOnly([
+             'displayName', 'email', 'photoURL',
+             'profile', 'onboardingCompleted', 'createdAt', 'updatedAt'
+           ])
+        && incoming().onboardingCompleted is bool;
+      // Account deletion is a support operation for now, not a client one.
+      allow delete: if false;
+
+      match /sessions/{sessionId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && incoming().keys().hasOnly([
+               'title', 'theme', 'mode', 'status',
+               'turnCount', 'episodeCount', 'createdAt', 'updatedAt'
+             ])
+          && incoming().title is string && incoming().title.size() <= 200
+          && incoming().mode in ['counselor', 'karakuchi']
+          && incoming().status in ['open', 'closed'];
+
+        // Messages are an append-only log: the transcript is the evidence the
+        // 自分史 is extracted from, so it must not be editable after the fact.
+        match /messages/{messageId} {
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid)
+            && incoming().keys().hasOnly(['role', 'text', 'mode', 'createdAt'])
+            && incoming().role in ['user', 'ai']
+            && incoming().text is string
+            && incoming().text.size() > 0
+            && incoming().text.size() <= 8000;
+          allow update: if false;
+          allow delete: if isOwner(uid);
+        }
+      }
+
+      match /episodes/{episodeId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && incoming().keys().hasOnly([
+               'title', 'tag', 'emotion', 'star', 'learn',
+               'sessionId', 'createdAt', 'updatedAt'
+             ])
+          && incoming().title is string && incoming().title.size() <= 200
+          && incoming().star.keys().hasOnly(['S', 'T', 'A', 'R'])
+          && incoming().learn is string && incoming().learn.size() <= 2000;
+      }
+    }
+
+    // Anything not matched above stays closed.
     match /{document=**} {
       allow read, write: if false;
     }

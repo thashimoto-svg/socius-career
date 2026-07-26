@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { Bubble, type ChatMode } from "@/components/Bubble";
+import { Bubble } from "@/components/Bubble";
+import type { ChatMode } from "@/lib/firebase/schema";
 import { T } from "@/lib/theme";
 
 type Turn =

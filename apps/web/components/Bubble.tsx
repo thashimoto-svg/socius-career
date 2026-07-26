@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
+import type { ChatMode } from "@/lib/firebase/schema";
 import { T } from "@/lib/theme";
-
-export type ChatMode = "counselor" | "karakuchi";
 
 type BubbleProps = {
   who: "ai" | "user";
