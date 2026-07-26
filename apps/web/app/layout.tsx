@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Shippori_Mincho, Zen_Kaku_Gothic_New } from "next/font/google";
+import { AuthProvider } from "@/lib/firebase/auth-context";
 import "./globals.css";
 
 // Body / UI font.
@@ -45,7 +46,7 @@ export default function RootLayout({
       <body className="min-h-full">
         {/* Mobile-first column; centered with a subtle frame on wider screens. */}
         <div className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col bg-sc-paper shadow-[0_0_60px_rgba(34,48,47,0.06)]">
-          {children}
+          <AuthProvider>{children}</AuthProvider>
         </div>
       </body>
     </html>
