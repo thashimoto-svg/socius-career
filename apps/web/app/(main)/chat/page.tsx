@@ -24,7 +24,7 @@ import {
   reopenSession,
   updateSessionMeta,
 } from "@/lib/firebase/sessions";
-import { postJson } from "@/lib/api-client";
+import { postJson, postStream } from "@/lib/api-client";
 import { T } from "@/lib/theme";
 
 const MODES: { id: ChatMode; label: string }[] = [
@@ -32,7 +32,6 @@ const MODES: { id: ChatMode; label: string }[] = [
   { id: "karakuchi", label: "ストレート(辛口)" },
 ];
 
-type ChatReply = { text: string };
 type ExtractReply = {
   episode: {
     title: string;
@@ -62,6 +61,8 @@ function ChatScreen() {
   const [mode, setMode] = useState<ChatMode>("counselor");
   const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
+  // The reply as it streams in, before it exists as a saved message.
+  const [streaming, setStreaming] = useState("");
   const [ending, setEnding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,16 +81,24 @@ function ChatScreen() {
       if (!user) return;
       setThinking(true);
       setError(null);
+      setStreaming("");
       try {
-        const { text } = await postJson<ChatReply>("/api/chat", user, {
-          mode: tone,
-          theme,
-          profile,
-          messages: transcript.map((m) => ({ role: m.role, text: m.text })),
-        });
+        const text = await postStream(
+          "/api/chat",
+          user,
+          {
+            mode: tone,
+            theme,
+            profile,
+            messages: transcript.map((m) => ({ role: m.role, text: m.text })),
+          },
+          (delta) => setStreaming((prev) => prev + delta),
+        );
+        // Saved only once the reply is complete: messages are append-only, so a
+        // half-written turn would be stuck in the transcript permanently.
         const saved = await appendMessage(user.uid, sessionId, {
           role: "ai",
-          text,
+          text: text.trim(),
           mode: tone,
         });
         setMessages((prev) => [...prev, saved]);
@@ -97,6 +106,7 @@ function ChatScreen() {
         setError(e instanceof Error ? e.message : "応答に失敗しました。");
       } finally {
         setThinking(false);
+        setStreaming("");
       }
     },
     [user, profile],
@@ -153,7 +163,7 @@ function ChatScreen() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, thinking]);
+  }, [messages, thinking, streaming]);
 
   const send = async () => {
     const text = draft.trim();
@@ -299,7 +309,11 @@ function ChatScreen() {
 
         {thinking && (
           <Bubble who="ai" mode={mode}>
-            <span style={{ color: T.sub }}>考えています…</span>
+            {streaming ? (
+              <span aria-live="polite">{streaming}</span>
+            ) : (
+              <span style={{ color: T.sub }}>考えています…</span>
+            )}
           </Bubble>
         )}
 
