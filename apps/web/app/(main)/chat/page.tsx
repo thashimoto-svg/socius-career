@@ -2,15 +2,12 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { getDoc } from "firebase/firestore";
 import { defaultTheme, titleFromFirstMessage } from "@socius/prompts";
 import { Bubble } from "@/components/Bubble";
 import { AuthSplash } from "@/components/auth-splash";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { createEpisode } from "@/lib/firebase/episodes";
 import {
-  sessionRef,
-  toSession,
   type ChatMode,
   type Message,
   type Session,
@@ -20,10 +17,9 @@ import {
   appendMessage,
   closeSession,
   createSession,
-  getOrCreateOpenSession,
-  getSessionMessages,
-  reopenSession,
+  openChat,
   updateSessionMeta,
+  type OpenedChat,
 } from "@/lib/firebase/sessions";
 import { SessionDrawer } from "@/components/SessionDrawer";
 import { postJson, postStream } from "@/lib/api-client";
@@ -67,17 +63,26 @@ function ChatScreen() {
   const [streaming, setStreaming] = useState("");
   const [ending, setEnding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Kept apart from `error`: this one means there is no conversation on screen
+  // to attach a message to, so it needs the whole screen and a way out.
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [openAttempt, setOpenAttempt] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
 
   const profile = userDoc?.profile ?? null;
   const accent = mode === "karakuchi" ? T.karakuchi : T.primary;
   const resumeId = searchParams.get("s");
+  const theme = defaultTheme(profile);
 
   const bottomRef = useRef<HTMLDivElement>(null);
-  // Loading a session twice would double the opening message, and React runs
-  // effects twice in development.
-  const loadedFor = useRef<string | null>(null);
+  // The request to open a session, remembered so that the two runs React makes
+  // of the same mount in development share one — the first run is cancelled
+  // the instant it starts, so anything the second run declines to redo is work
+  // nobody is left listening for.
+  const openRequest = useRef<{ key: string; promise: Promise<OpenedChat> } | null>(
+    null,
+  );
 
   /** Ask Gemini for the next line and append it to the transcript. */
   const requestReply = useCallback(
@@ -116,14 +121,21 @@ function ChatScreen() {
     [user, profile],
   );
 
+  // The opening line needs the current tone and profile, but neither may be a
+  // dependency of the effect below: a new identity for either would re-open the
+  // session and wipe the screen out from under a conversation in progress.
+  const requestReplyRef = useRef(requestReply);
+  useEffect(() => {
+    requestReplyRef.current = requestReply;
+  }, [requestReply]);
+
   // Open the session: resume the one the history screen pointed at, otherwise
   // pick up the most recent unfinished 壁打ち, otherwise start a new one.
   useEffect(() => {
     if (!user) return;
 
-    const key = `${user.uid}:${resumeId ?? "latest"}`;
-    if (loadedFor.current === key) return;
-    loadedFor.current = key;
+    const uid = user.uid;
+    const key = `${uid}:${resumeId ?? "latest"}:${openAttempt}`;
 
     // Switching threads from the drawer would otherwise leave the previous
     // conversation on screen under the new session's header until its
@@ -132,25 +144,22 @@ function ChatScreen() {
     setMessages([]);
     setStreaming("");
     setError(null);
+    setOpenError(null);
+
+    if (openRequest.current?.key !== key) {
+      openRequest.current = {
+        key,
+        promise: openChat(uid, {
+          resumeId,
+          fallback: { title: "新しい壁打ち", theme, mode: "counselor" },
+        }),
+      };
+    }
 
     let cancelled = false;
 
-    (async () => {
-      try {
-        const theme = defaultTheme(profile);
-        const opened =
-          // A link to a session that no longer exists falls through to the
-          // normal path rather than stranding the student on a blank screen.
-          (resumeId ? await resumeById(user.uid, resumeId) : null) ??
-          (await getOrCreateOpenSession(user.uid, {
-            title: "新しい壁打ち",
-            theme,
-            mode: "counselor",
-          }));
-
-        if (cancelled) return;
-
-        const history = await getSessionMessages(user.uid, opened.id);
+    openRequest.current.promise.then(
+      ({ session: opened, messages: history }) => {
         if (cancelled) return;
 
         setSession(opened);
@@ -159,19 +168,24 @@ function ChatScreen() {
 
         // A session with no transcript yet is one the AI has to open.
         if (history.length === 0) {
-          await requestReply(opened.id, [], opened.mode, opened.theme || theme);
+          void requestReplyRef.current(
+            opened.id,
+            [],
+            opened.mode,
+            opened.theme || theme,
+          );
         }
-      } catch {
-        if (!cancelled) {
-          setError("壁打ちを開けませんでした。ページを再読み込みしてください。");
-        }
-      }
-    })();
+      },
+      () => {
+        if (cancelled) return;
+        setOpenError("壁打ちを読み込めませんでした。");
+      },
+    );
 
     return () => {
       cancelled = true;
     };
-  }, [user, resumeId, profile, requestReply]);
+  }, [user, resumeId, theme, openAttempt]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -216,7 +230,7 @@ function ChatScreen() {
       // pending URL.
       const created = await createSession(user.uid, {
         title: "新しい壁打ち",
-        theme: defaultTheme(profile),
+        theme,
         mode,
       });
       setDrawerOpen(false);
@@ -251,16 +265,41 @@ function ChatScreen() {
   };
 
   if (!session) {
-    return error ? (
+    return openError ? (
       <div
+        role="alert"
         style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 14,
           padding: 24,
-          fontSize: 12.5,
-          color: T.karakuchi,
-          lineHeight: 1.9,
+          textAlign: "center",
         }}
       >
-        {error}
+        <div style={{ fontSize: 12.5, color: T.karakuchi, lineHeight: 1.9 }}>
+          {openError}
+          <br />
+          通信状況を確認して、もう一度お試しください。
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpenAttempt((n) => n + 1)}
+          style={{
+            padding: "9px 24px",
+            borderRadius: 10,
+            border: `1.5px solid ${T.primary}`,
+            background: T.primarySoft,
+            color: T.primary,
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          再試行
+        </button>
       </div>
     ) : (
       <AuthSplash />
@@ -326,7 +365,7 @@ function ChatScreen() {
               whiteSpace: "nowrap",
             }}
           >
-            今日のテーマ: {session.theme || defaultTheme(profile)}
+            今日のテーマ: {session.theme || theme}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -497,21 +536,4 @@ function ChatScreen() {
       </div>
     </div>
   );
-}
-
-/**
- * Resume the session the 履歴 screen linked to. A finished session reopens
- * rather than starting a new one — the student came back to this conversation
- * on purpose.
- */
-async function resumeById(uid: string, sessionId: string): Promise<Session | null> {
-  const snap = await getDoc(sessionRef(uid, sessionId));
-  if (!snap.exists()) return null;
-
-  const session = toSession(snap.id, snap.data());
-  if (session.status === "closed") {
-    await reopenSession(uid, sessionId);
-    return { ...session, status: "open" };
-  }
-  return session;
 }

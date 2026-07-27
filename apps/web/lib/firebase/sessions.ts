@@ -1,5 +1,6 @@
 import {
   addDoc,
+  getDoc,
   getDocs,
   increment,
   limit,
@@ -10,6 +11,7 @@ import {
   where,
   deleteDoc,
 } from "firebase/firestore";
+import { withTimeout } from "../with-timeout";
 import {
   messagesRef,
   sessionRef,
@@ -92,6 +94,62 @@ export async function getSessionMessages(
     query(messagesRef(uid, sessionId), orderBy("createdAt", "asc"), limit(200)),
   );
   return snap.docs.map((d) => toMessage(d.id, d.data()));
+}
+
+/** How long /chat waits for a session and its transcript before giving up. */
+const OPEN_TIMEOUT_MS = 10_000;
+
+export type OpenedChat = { session: Session; messages: Message[] };
+
+/**
+ * Everything the 壁打ち screen needs to start rendering: which conversation to
+ * continue, and what has been said in it so far.
+ *
+ * Bounded on purpose. Whatever goes wrong underneath — an unreachable backend,
+ * a rule that says no, an index that is still building — has to end in either a
+ * session or an error, because the screen has no third state to offer.
+ */
+export async function openChat(
+  uid: string,
+  opts: {
+    /** The session the 履歴 screen or the drawer linked to, if any. */
+    resumeId: string | null;
+    fallback: { title: string; theme: string; mode: ChatMode };
+  },
+): Promise<OpenedChat> {
+  return withTimeout(
+    (async () => {
+      const session =
+        // A link to a session that no longer exists falls through to the
+        // normal path rather than stranding the student on a blank screen.
+        (opts.resumeId ? await resumeById(uid, opts.resumeId) : null) ??
+        (await getOrCreateOpenSession(uid, opts.fallback));
+
+      return { session, messages: await getSessionMessages(uid, session.id) };
+    })(),
+    OPEN_TIMEOUT_MS,
+    "壁打ちの読み込みに時間がかかりすぎています。",
+  );
+}
+
+/**
+ * Resume the session the 履歴 screen linked to. A finished session reopens
+ * rather than starting a new one — the student came back to this conversation
+ * on purpose.
+ */
+async function resumeById(
+  uid: string,
+  sessionId: string,
+): Promise<Session | null> {
+  const snap = await getDoc(sessionRef(uid, sessionId));
+  if (!snap.exists()) return null;
+
+  const session = toSession(snap.id, snap.data());
+  if (session.status === "closed") {
+    await reopenSession(uid, sessionId);
+    return { ...session, status: "open" };
+  }
+  return session;
 }
 
 /**
