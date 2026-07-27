@@ -59,8 +59,38 @@ body {
   }
 }
 
+/* Session drawer: the panel slides in from the edge it is anchored to, so the
+   scrim fading in is what tells you the screen behind is still there. */
+.sc-drawer {
+  animation: scdrawer 0.22s ease-out;
+}
+
+@keyframes scdrawer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.sc-scrim {
+  animation: scscrim 0.22s ease-out;
+}
+
+@keyframes scscrim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .sc-fade {
+  .sc-fade,
+  .sc-drawer,
+  .sc-scrim {
     animation: none;
   }
 }

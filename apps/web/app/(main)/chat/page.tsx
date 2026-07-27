@@ -19,11 +19,13 @@ import {
 import {
   appendMessage,
   closeSession,
+  createSession,
   getOrCreateOpenSession,
   getSessionMessages,
   reopenSession,
   updateSessionMeta,
 } from "@/lib/firebase/sessions";
+import { SessionDrawer } from "@/components/SessionDrawer";
 import { postJson, postStream } from "@/lib/api-client";
 import { T } from "@/lib/theme";
 
@@ -65,6 +67,8 @@ function ChatScreen() {
   const [streaming, setStreaming] = useState("");
   const [ending, setEnding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
 
   const profile = userDoc?.profile ?? null;
   const accent = mode === "karakuchi" ? T.karakuchi : T.primary;
@@ -120,6 +124,14 @@ function ChatScreen() {
     const key = `${user.uid}:${resumeId ?? "latest"}`;
     if (loadedFor.current === key) return;
     loadedFor.current = key;
+
+    // Switching threads from the drawer would otherwise leave the previous
+    // conversation on screen under the new session's header until its
+    // transcript arrived.
+    setSession(null);
+    setMessages([]);
+    setStreaming("");
+    setError(null);
 
     let cancelled = false;
 
@@ -189,6 +201,33 @@ function ChatScreen() {
     await requestReply(session.id, next, mode, session.theme);
   };
 
+  const openFromDrawer = (sessionId: string) => {
+    setDrawerOpen(false);
+    if (sessionId === session?.id) return;
+    router.push(`/chat?s=${sessionId}`);
+  };
+
+  const startNewSession = async () => {
+    if (!user || creatingSession) return;
+    setCreatingSession(true);
+    try {
+      // Created before navigating so the drawer's own list has something to
+      // show next time it opens, rather than a thread that exists only as a
+      // pending URL.
+      const created = await createSession(user.uid, {
+        title: "新しい壁打ち",
+        theme: defaultTheme(profile),
+        mode,
+      });
+      setDrawerOpen(false);
+      router.push(`/chat?s=${created.id}`);
+    } catch {
+      setError("新しい壁打ちを始められませんでした。もう一度お試しください。");
+    } finally {
+      setCreatingSession(false);
+    }
+  };
+
   const changeMode = (next: ChatMode) => {
     setMode(next);
     if (user && session) void updateSessionMeta(user.uid, session.id, { mode: next });
@@ -237,6 +276,18 @@ function ChatScreen() {
         minHeight: 0,
       }}
     >
+      {user && (
+        <SessionDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          uid={user.uid}
+          currentSessionId={session.id}
+          onSelect={openFromDrawer}
+          onNewSession={startNewSession}
+          creating={creatingSession}
+        />
+      )}
+
       {/* theme + tone switch */}
       <div
         style={{
@@ -245,8 +296,38 @@ function ChatScreen() {
           background: T.paper,
         }}
       >
-        <div style={{ fontSize: 11, color: T.sub, marginBottom: 6 }}>
-          今日のテーマ: {session.theme || defaultTheme(profile)}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="壁打ちの一覧を開く"
+            aria-expanded={drawerOpen}
+            style={{
+              border: "none",
+              background: "none",
+              padding: 2,
+              display: "flex",
+              alignItems: "center",
+              cursor: "pointer",
+            }}
+          >
+            <svg width="16" height="12" viewBox="0 0 16 12" aria-hidden="true" focusable="false">
+              <rect width="16" height="1.6" rx="0.8" fill={T.ink} />
+              <rect y="5.2" width="16" height="1.6" rx="0.8" fill={T.ink} />
+              <rect y="10.4" width="16" height="1.6" rx="0.8" fill={T.ink} />
+            </svg>
+          </button>
+          <div
+            style={{
+              fontSize: 11,
+              color: T.sub,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            今日のテーマ: {session.theme || defaultTheme(profile)}
+          </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {MODES.map((m) => {
