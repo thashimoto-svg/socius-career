@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { AuthSplash } from "@/components/auth-splash";
@@ -9,6 +10,7 @@ import { T } from "@/lib/theme";
 export default function LoginPage() {
   const { user, loading, error, signInWithGoogle } = useAuth();
   const router = useRouter();
+  const [agreed, setAgreed] = useState(false);
 
   // Someone who is already signed in has no business on this screen; "/" owns
   // the onboarding-vs-chat decision, so bounce there rather than guessing.
@@ -43,18 +45,62 @@ export default function LoginPage() {
         </div>
       </div>
 
+      <label
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 9,
+          marginBottom: 14,
+          fontSize: 12,
+          color: T.ink,
+          lineHeight: 1.7,
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={agreed}
+          onChange={(e) => setAgreed(e.target.checked)}
+          style={{
+            width: 17,
+            height: 17,
+            marginTop: 1,
+            accentColor: T.primary,
+            flexShrink: 0,
+            cursor: "pointer",
+          }}
+        />
+        <span>
+          <Link
+            href="/privacy"
+            style={{ color: T.primary, fontWeight: 700, textDecoration: "underline" }}
+          >
+            プライバシーポリシー
+          </Link>
+          と
+          <Link
+            href="/terms"
+            style={{ color: T.primary, fontWeight: 700, textDecoration: "underline" }}
+          >
+            利用規約
+          </Link>
+          に同意する
+        </span>
+      </label>
+
       <button
         type="button"
-        onClick={signInWithGoogle}
+        onClick={() => signInWithGoogle(agreed)}
+        disabled={!agreed}
         style={{
           padding: "13px 0",
           borderRadius: 12,
           border: "none",
-          background: T.primary,
-          color: "#fff",
+          background: agreed ? T.primary : T.line,
+          color: agreed ? "#fff" : T.sub,
           fontSize: 14,
           fontWeight: 700,
-          cursor: "pointer",
+          cursor: agreed ? "pointer" : "not-allowed",
         }}
       >
         Google で続ける

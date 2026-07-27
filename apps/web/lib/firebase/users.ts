@@ -14,7 +14,10 @@ import {
  * Merged rather than overwritten: `profile` and `onboardingCompleted` belong to
  * the student's own answers and must survive a re-login.
  */
-export async function ensureUserDoc(user: User): Promise<UserDoc> {
+export async function ensureUserDoc(
+  user: User,
+  opts: { recordConsent?: boolean } = {},
+): Promise<UserDoc> {
   const ref = userRef(user.uid);
   const snap = await getDoc(ref);
 
@@ -26,10 +29,13 @@ export async function ensureUserDoc(user: User): Promise<UserDoc> {
   };
 
   if (!snap.exists()) {
+    // Reaching a first sign-in at all means the consent checkbox was ticked —
+    // it is what enables the button.
     await setDoc(ref, {
       ...identity,
       profile: null,
       onboardingCompleted: false,
+      agreedToTermsAt: serverTimestamp(),
       createdAt: serverTimestamp(),
     });
     return {
@@ -38,13 +44,24 @@ export async function ensureUserDoc(user: User): Promise<UserDoc> {
       photoURL: user.photoURL,
       profile: null,
       onboardingCompleted: false,
+      agreedToTermsAt: null,
       createdAt: null,
       updatedAt: null,
     };
   }
 
-  await setDoc(ref, identity, { merge: true });
-  return toUserDoc(snap.data());
+  const existing = toUserDoc(snap.data());
+
+  // Only stamped on a sign-in the student actually consented through, and only
+  // if it is not already recorded. A restored session carries no consent, so it
+  // must not backfill one for an account that predates the checkbox.
+  const consent =
+    opts.recordConsent && !existing.agreedToTermsAt
+      ? { agreedToTermsAt: serverTimestamp() }
+      : {};
+
+  await setDoc(ref, { ...identity, ...consent }, { merge: true });
+  return existing;
 }
 
 export async function getUserDoc(uid: string): Promise<UserDoc | null> {

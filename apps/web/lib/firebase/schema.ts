@@ -33,6 +33,11 @@ export type UserDoc = {
   photoURL: string | null;
   profile: OnboardingProfile | null;
   onboardingCompleted: boolean;
+  /**
+   * When the student ticked 「プライバシーポリシーと利用規約に同意する」 on the
+   * login screen. Null for accounts created before the checkbox existed.
+   */
+  agreedToTermsAt: Date | null;
   createdAt: Date | null;
   updatedAt: Date | null;
 };
@@ -178,6 +183,7 @@ export function toUserDoc(d: DocumentData): UserDoc {
         }
       : null,
     onboardingCompleted: d.onboardingCompleted === true,
+    agreedToTermsAt: toDate(d.agreedToTermsAt),
     createdAt: toDate(d.createdAt),
     updatedAt: toDate(d.updatedAt),
   };

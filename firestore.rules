@@ -25,9 +25,15 @@ service cloud.firestore {
       allow create, update: if isOwner(uid)
         && incoming().keys().hasOnly([
              'displayName', 'email', 'photoURL',
-             'profile', 'onboardingCompleted', 'createdAt', 'updatedAt'
+             'profile', 'onboardingCompleted', 'agreedToTermsAt',
+             'createdAt', 'updatedAt'
            ])
-        && incoming().onboardingCompleted is bool;
+        && incoming().onboardingCompleted is bool
+        // Written once, when the student ticks the box on the login screen.
+        // Optional so that documents predating the consent checkbox stay
+        // writable without a backfill that would invent a consent.
+        && (!incoming().keys().hasAny(['agreedToTermsAt'])
+            || incoming().agreedToTermsAt is timestamp);
       // Account deletion is a support operation for now, not a client one.
       allow delete: if false;
 

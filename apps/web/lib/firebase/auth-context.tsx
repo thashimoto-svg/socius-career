@@ -32,7 +32,11 @@ type AuthValue = {
   loading: boolean;
   /** Set when the last sign-in attempt failed, for display to the student. */
   error: string | null;
-  signInWithGoogle: () => Promise<void>;
+  /**
+   * `agreedToTerms` records the consent the login screen's checkbox gates the
+   * button on, so the fact is stored against the account that gave it.
+   */
+  signInWithGoogle: (agreedToTerms: boolean) => Promise<void>;
   signOut: () => Promise<void>;
   /** Reflect a just-saved onboarding answer without a round trip. */
   applyOnboarding: (profile: OnboardingProfile) => void;
@@ -50,6 +54,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // fetch land last and resurrect a signed-out student's profile.
   const generation = useRef(0);
 
+  // Consent belongs to the sign-in the student just performed, not to a session
+  // Firebase restored from IndexedDB on page load — those must not stamp one.
+  const pendingConsent = useRef(false);
+
   useEffect(() => {
     // Firebase reads the persisted session from IndexedDB asynchronously, so
     // the first callback is what tells us whether anyone is actually signed in.
@@ -64,7 +72,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       setLoading(true);
-      ensureUserDoc(next)
+      const recordConsent = pendingConsent.current;
+      pendingConsent.current = false;
+
+      ensureUserDoc(next, { recordConsent })
         .then((doc) => {
           if (gen !== generation.current) return;
           setUserDoc(doc);
@@ -83,11 +94,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const signInWithGoogle = useCallback(async () => {
+  const signInWithGoogle = useCallback(async (agreedToTerms: boolean) => {
     setError(null);
+    pendingConsent.current = agreedToTerms;
     try {
       await signInWithPopup(getFirebaseAuth(), new GoogleAuthProvider());
     } catch (e) {
+      pendingConsent.current = false;
       const code = (e as { code?: string }).code ?? "";
       // Closing the popup is a normal thing to do, not an error worth showing.
       if (
