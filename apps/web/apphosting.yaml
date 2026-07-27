@@ -1,0 +1,77 @@
+# Firebase App Hosting — backend settings for the Next.js app.
+#
+# This file sits in the backend's root directory (`apphosting.rootDir` in
+# firebase.json), which is also this app's directory. App Hosting expects the
+# two to be the same place: the buildpack looks for a dependency lock file
+# directly inside the root directory, and the Next.js adapter looks for the
+# build output there too. That is why apps/web is a self-contained npm package
+# with its own package-lock.json rather than an npm workspace member.
+#
+# The whole repository is still uploaded on deploy; only this directory is
+# built.
+#
+# See https://firebase.google.com/docs/app-hosting/configure
+
+runConfig:
+  # The 壁打ち is bursty and low-volume: scale to zero between sessions, and
+  # cap the ceiling so a runaway loop cannot run up a bill.
+  minInstances: 0
+  maxInstances: 2
+  cpu: 1
+  memoryMiB: 512
+  concurrency: 80
+
+env:
+  # ---- Firebase Web SDK ----
+  # Inlined into the client bundle at build time, so BUILD availability is the
+  # one that matters; these are public by design (same values the browser
+  # already ships). Mirrors apps/web/.env.local, which is gitignored and
+  # therefore never uploaded.
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: AIzaSyDQa2AKTto629S8C--gpPbyFXHYgcEbKx4
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: socius-career-web.firebaseapp.com
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: socius-career-web
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: socius-career-web.firebasestorage.app
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "921492975909"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: 1:921492975909:web:aab094bc9b4cb78f4deacc
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
+    value: G-1C3RD4NDXM
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # ---- Gemini ----
+  # Server-only, and the browser must never see it, so it lives in Cloud Secret
+  # Manager and is granted at RUNTIME only. Rotate the value with:
+  #   firebase apphosting:secrets:set GEMINI_API_KEY
+  #
+  # The secret is deliberately named after the variable: `secrets:set` offers to
+  # append an entry to this file unless one already matches by name, so keeping
+  # them identical stops a rotation from duplicating the block below.
+  - variable: GEMINI_API_KEY
+    secret: GEMINI_API_KEY
+    availability:
+      - RUNTIME

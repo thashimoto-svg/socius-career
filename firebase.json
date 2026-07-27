@@ -2,5 +2,15 @@
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
+  },
+  "apphosting": {
+    "backendId": "socius-career-web",
+    "rootDir": "apps/web",
+    "ignore": [
+      "node_modules",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log"
+    ]
   }
 }

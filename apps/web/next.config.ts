@@ -1,10 +1,9 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  // @socius/prompts ships raw TypeScript rather than a build output — the
-  // prompts are product copy that the whole team edits, so a build step
-  // between writing a line and seeing it in the 壁打ち would be in the way.
-  transpilePackages: ["@socius/prompts"],
-};
+// The 壁打ち prompts used to be a workspace package, and needed
+// `transpilePackages` because they ship raw TypeScript rather than a build
+// output. They now live in ./prompts as ordinary source files of this app,
+// compiled like everything else, so there is nothing left to configure.
+const nextConfig: NextConfig = {};
 
 export default nextConfig;

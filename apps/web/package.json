@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@google/genai": "^2.13.0",
-    "@socius/prompts": "^0.1.0",
     "firebase": "^12.16.0",
     "jose": "^6.2.4",
     "next": "16.2.10",

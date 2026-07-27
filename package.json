@@ -3,15 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "description": "就活生向け対話型自己分析AIアプリ",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
   "scripts": {
-    "dev": "npm run dev --workspace apps/web",
-    "build": "npm run build --workspace apps/web",
-    "start": "npm run start --workspace apps/web",
-    "lint": "npm run lint --workspaces --if-present",
+    "dev": "npm run dev --prefix apps/web",
+    "build": "npm run build --prefix apps/web",
+    "start": "npm run start --prefix apps/web",
+    "lint": "npm run lint --prefix apps/web --if-present",
+    "install:app": "npm install --prefix apps/web",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\""
   },
   "engines": {
