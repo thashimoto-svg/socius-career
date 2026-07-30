@@ -193,7 +193,9 @@ export default function JibunshiPage() {
                   </div>
                 </div>
 
-                {/* Ownership: the student can edit, delete, and (v0.2) export. */}
+                {/* Ownership: the student can edit and delete. Export lands in
+                    v0.2 — until it does something, a dead button is only a
+                    thing the student tries and fails to press. */}
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
                     type="button"
@@ -228,22 +230,6 @@ export default function JibunshiPage() {
                     }}
                   >
                     削除する
-                  </button>
-                  <button
-                    type="button"
-                    disabled
-                    style={{
-                      flex: 1,
-                      padding: "8px 0",
-                      borderRadius: 9,
-                      border: `1.5px solid ${T.line}`,
-                      background: T.paper,
-                      fontSize: 11.5,
-                      fontWeight: 700,
-                      color: T.sub,
-                    }}
-                  >
-                    書き出す(v0.2)
                   </button>
                 </div>
               </div>
