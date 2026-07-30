@@ -68,6 +68,19 @@ function ChatScreen() {
   const [streaming, setStreaming] = useState("");
   const [ending, setEnding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The turn that failed, kept so it can be asked for again.
+  //
+  // The student's message is already saved by the time the reply is requested —
+  // the transcript is append-only, so it has to be. Without this, a failed reply
+  // left the conversation with a question nobody answered and no button that
+  // would make it try again: typing the message a second time only added a
+  // second student turn. This is the way out.
+  const [failedTurn, setFailedTurn] = useState<{
+    sessionId: string;
+    transcript: Message[];
+    tone: ChatMode;
+    theme: string;
+  } | null>(null);
   // Kept apart from `error`: this one means there is no conversation on screen
   // to attach a message to, so it needs the whole screen and a way out.
   const [openError, setOpenError] = useState<string | null>(null);
@@ -98,6 +111,7 @@ function ChatScreen() {
       if (!user) return;
       setThinking(true);
       setError(null);
+      setFailedTurn(null);
       setStreaming("");
       try {
         const text = await postStream(
@@ -121,6 +135,7 @@ function ChatScreen() {
         setMessages((prev) => [...prev, saved]);
       } catch (e) {
         setError(e instanceof Error ? e.message : "応答に失敗しました。");
+        setFailedTurn({ sessionId, transcript, tone, theme });
       } finally {
         setThinking(false);
         setStreaming("");
@@ -203,11 +218,22 @@ function ChatScreen() {
     if (!text || !user || !session || thinking) return;
 
     setDraft("");
-    const saved = await appendMessage(user.uid, session.id, {
-      role: "user",
-      text,
-      mode: null,
-    });
+
+    let saved: Message;
+    try {
+      saved = await appendMessage(user.uid, session.id, {
+        role: "user",
+        text,
+        mode: null,
+      });
+    } catch {
+      // The message was never written, so there is nothing to resend — the
+      // student's words go back in the box they came from instead of vanishing.
+      setDraft(text);
+      setError("メッセージを送れませんでした。通信状況を確認して、もう一度送信してください。");
+      return;
+    }
+
     const next = [...messages, saved];
     setMessages(next);
 
@@ -444,6 +470,35 @@ function ChatScreen() {
             }}
           >
             {error}
+            {failedTurn && (
+              <button
+                type="button"
+                onClick={() =>
+                  void requestReply(
+                    failedTurn.sessionId,
+                    failedTurn.transcript,
+                    failedTurn.tone,
+                    failedTurn.theme,
+                  )
+                }
+                disabled={thinking}
+                style={{
+                  display: "block",
+                  marginTop: 8,
+                  padding: "6px 18px",
+                  borderRadius: 9,
+                  border: `1.5px solid ${T.karakuchi}`,
+                  background: T.paper,
+                  color: T.karakuchi,
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  opacity: thinking ? 0.5 : 1,
+                  cursor: thinking ? "default" : "pointer",
+                }}
+              >
+                再送する
+              </button>
+            )}
           </div>
         )}
 

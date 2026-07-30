@@ -6,8 +6,11 @@ import {
 } from "@socius/prompts";
 import { isRateLimited, verifyRequestUid } from "@/lib/server/auth";
 import {
+  callGemini,
   CHAT_MODEL,
   getGemini,
+  historyWindow,
+  isGeminiFailure,
   parseMessages,
   toGeminiContents,
 } from "@/lib/server/gemini";
@@ -82,44 +85,67 @@ export async function POST(request: Request) {
   // errors all surface on this first pull, so the common failures still get a
   // real status and a Japanese message the student can act on.
   try {
-    stream = await getGemini().models.generateContentStream({
-      model: CHAT_MODEL,
-      contents: opening
-        ? [{ role: "user", parts: [{ text: buildOpeningInstruction() }] }]
-        : toGeminiContents(messages),
-      config: {
-        systemInstruction: buildChatSystemPrompt({ profile, mode, theme }),
-        temperature: 0.9,
-        maxOutputTokens: 800,
-        // A coaching question does not need a long deliberation, and latency
-        // between turns is what makes a 壁打ち feel like a conversation.
-        thinkingConfig: { thinkingBudget: 0 },
-      },
+    const result = await callGemini("api/chat", async () => {
+      const started = await getGemini().models.generateContentStream({
+        model: CHAT_MODEL,
+        contents: opening
+          ? [{ role: "user", parts: [{ text: buildOpeningInstruction() }] }]
+          : // Only the tail of the conversation is sent. Firestore keeps all of
+            // it; what the model needs is the part it is answering.
+            toGeminiContents(historyWindow(messages)),
+        config: {
+          systemInstruction: buildChatSystemPrompt({ profile, mode, theme }),
+          temperature: 0.9,
+          maxOutputTokens: 800,
+          // A coaching question does not need a long deliberation, and latency
+          // between turns is what makes a 壁打ち feel like a conversation.
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      });
+
+      // Driven with next() rather than `for await`, because breaking out of a
+      // for-await loop closes the generator — the rest of the reply would be
+      // thrown away the moment the first chunk arrived.
+      //
+      // Pulled inside the retried call on purpose: a quota rejection surfaces
+      // here, on the first read, not from generateContentStream itself.
+      let head = "";
+      for (;;) {
+        const { value, done } = await started.next();
+        if (done) break;
+        if (value.text) {
+          head = value.text;
+          break;
+        }
+      }
+
+      // A retry has to start from a fresh stream, so a spent one is closed
+      // rather than left for the next attempt to read from.
+      if (!head) {
+        await started.return?.(undefined);
+        throw new Error("empty first chunk");
+      }
+
+      return { stream: started, head };
     });
 
-    // Driven with next() rather than `for await`, because breaking out of a
-    // for-await loop closes the generator — the rest of the reply would be
-    // thrown away the moment the first chunk arrived.
-    first = "";
-    for (;;) {
-      const { value, done } = await stream.next();
-      if (done) break;
-      if (value.text) {
-        first = value.text;
-        break;
-      }
-    }
+    stream = result.stream;
+    first = result.head;
   } catch (e) {
-    console.error("[api/chat] Gemini call failed", e);
+    if (isGeminiFailure(e)) {
+      return Response.json(
+        { error: e.message },
+        {
+          status: e.status,
+          headers: e.retryAfterSeconds
+            ? { "retry-after": String(Math.ceil(e.retryAfterSeconds)) }
+            : undefined,
+        },
+      );
+    }
+    console.error("[api/chat] unexpected failure", e);
     return Response.json(
-      { error: "AIの応答に失敗しました。時間をおいてもう一度お試しください。" },
-      { status: 502 },
-    );
-  }
-
-  if (!first) {
-    return Response.json(
-      { error: "返答を受け取れませんでした。もう一度お試しください。" },
+      { error: "返答を受け取れませんでした。もう一度送信してください。" },
       { status: 502 },
     );
   }

@@ -6,7 +6,14 @@ import {
   type ExtractedEpisode,
 } from "@socius/prompts";
 import { isRateLimited, verifyRequestUid } from "@/lib/server/auth";
-import { EXTRACT_MODEL, getGemini, parseMessages } from "@/lib/server/gemini";
+import {
+  callGemini,
+  EXTRACT_MODEL,
+  getGemini,
+  historyWindow,
+  isGeminiFailure,
+  parseMessages,
+} from "@/lib/server/gemini";
 
 /**
  * Turn a finished 壁打ち into one STAR + 学び + 感情 episode.
@@ -82,41 +89,89 @@ export async function POST(request: Request) {
     );
   }
 
+  let text: string | undefined;
+
   try {
-    const response = await getGemini().models.generateContent({
-      model: EXTRACT_MODEL,
-      contents: buildExtractionPrompt(transcript),
-      config: {
-        systemInstruction: EXTRACTION_SYSTEM_PROMPT,
-        responseMimeType: "application/json",
-        // The schema is plain JSON so @socius/prompts stays SDK-independent.
-        responseSchema: EPISODE_RESPONSE_SCHEMA as never,
-        // Low but non-zero: picking which sentence belongs in which slot is a
-        // judgement call, inventing a nicer sentence is not.
-        temperature: 0.2,
-        maxOutputTokens: 2000,
-      },
-    });
-
-    const text = response.text?.trim();
-    const episode = text ? normalize(JSON.parse(text)) : null;
-
-    if (!episode) {
-      return Response.json(
-        {
-          error:
-            "エピソードとして残せる具体的な話がまだ足りないようです。もう少し壁打ちを続けてみてください。",
+    const response = await callGemini("api/extract", () =>
+      getGemini().models.generateContent({
+        model: EXTRACT_MODEL,
+        // The whole conversation matters here in a way it does not for a single
+        // turn: the job is to pick the one episode the student told best, so the
+        // window is the full transcript parseMessages allows. Twenty 往復 is
+        // about 3,500 input tokens — no need to split or summarise anything.
+        contents: buildExtractionPrompt(historyWindow(transcript, 20)),
+        config: {
+          systemInstruction: EXTRACTION_SYSTEM_PROMPT,
+          responseMimeType: "application/json",
+          // The schema is plain JSON so @socius/prompts stays SDK-independent.
+          responseSchema: EPISODE_RESPONSE_SCHEMA as never,
+          // Low but non-zero: picking which sentence belongs in which slot is a
+          // judgement call, inventing a nicer sentence is not.
+          temperature: 0.2,
+          // Thinking tokens are spent out of the output allowance, and 2.5
+          // Flash thinks by default. The old 2,000 with no thinkingConfig meant
+          // a long transcript could think its way through the entire budget and
+          // return JSON cut off mid-string — which arrived as a parse error and
+          // was reported as 「抽出に失敗しました」. Both are now explicit, and
+          // the ceiling covers a fully populated STAR card.
+          thinkingConfig: { thinkingBudget: 1024 },
+          maxOutputTokens: 6000,
         },
-        { status: 422 },
+      }),
+    );
+
+    text = response.text?.trim();
+
+    // Truncation is not the same failure as a conversation with nothing in it,
+    // and telling the student to talk more would be the wrong instruction.
+    if (response.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+      console.error("[api/extract] response truncated", {
+        usage: response.usageMetadata,
+      });
+      return Response.json(
+        { error: "まとめが長くなりすぎました。もう一度お試しください。" },
+        { status: 502 },
       );
     }
-
-    return Response.json({ episode });
   } catch (e) {
-    console.error("[api/extract] extraction failed", e);
+    if (isGeminiFailure(e)) {
+      return Response.json(
+        { error: e.message },
+        {
+          status: e.status,
+          headers: e.retryAfterSeconds
+            ? { "retry-after": String(Math.ceil(e.retryAfterSeconds)) }
+            : undefined,
+        },
+      );
+    }
+    console.error("[api/extract] unexpected failure", e);
     return Response.json(
-      { error: "抽出に失敗しました。時間をおいてもう一度お試しください。" },
+      { error: "抽出に失敗しました。もう一度お試しください。" },
       { status: 502 },
     );
   }
+
+  let episode: ExtractedEpisode | null = null;
+  try {
+    episode = text ? normalize(JSON.parse(text)) : null;
+  } catch (e) {
+    console.error("[api/extract] response was not JSON", e);
+    return Response.json(
+      { error: "まとめを読み取れませんでした。もう一度お試しください。" },
+      { status: 502 },
+    );
+  }
+
+  if (!episode) {
+    return Response.json(
+      {
+        error:
+          "エピソードとして残せる具体的な話がまだ足りないようです。もう少し壁打ちを続けてみてください。",
+      },
+      { status: 422 },
+    );
+  }
+
+  return Response.json({ episode });
 }
