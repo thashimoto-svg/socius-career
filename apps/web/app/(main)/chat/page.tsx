@@ -25,10 +25,16 @@ import { SessionDrawer } from "@/components/SessionDrawer";
 import { postJson, postStream } from "@/lib/api-client";
 import { T } from "@/lib/theme";
 
-const MODES: { id: ChatMode; label: string }[] = [
-  { id: "counselor", label: "じっくり(カウンセラー風)" },
-  { id: "karakuchi", label: "ストレート(辛口)" },
-];
+/**
+ * The style is chosen once, when the 壁打ち is created, and then shown rather
+ * than offered (MTG 7/20). Mid-session switching is gone: the transcript the
+ * model is given would then mix two tones, and the cached history would no
+ * longer match the instruction that produced it.
+ */
+const MODE_LABELS: Record<ChatMode, string> = {
+  counselor: "じっくりモード",
+  karakuchi: "ストレートモード",
+};
 
 type ExtractReply = {
   episode: {
@@ -56,7 +62,6 @@ function ChatScreen() {
 
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [mode, setMode] = useState<ChatMode>("counselor");
   const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
   // The reply as it streams in, before it exists as a saved message.
@@ -71,6 +76,9 @@ function ChatScreen() {
   const [creatingSession, setCreatingSession] = useState(false);
 
   const profile = userDoc?.profile ?? null;
+  // The session document is the only source of truth for the tone, so there is
+  // no local copy that could drift from what is saved.
+  const mode: ChatMode = session?.mode ?? "counselor";
   const accent = mode === "karakuchi" ? T.karakuchi : T.primary;
   const resumeId = searchParams.get("s");
   const theme = defaultTheme(profile);
@@ -163,7 +171,6 @@ function ChatScreen() {
         if (cancelled) return;
 
         setSession(opened);
-        setMode(opened.mode);
         setMessages(history);
 
         // A session with no transcript yet is one the AI has to open.
@@ -212,7 +219,7 @@ function ChatScreen() {
       void updateSessionMeta(user.uid, session.id, { title });
     }
 
-    await requestReply(session.id, next, mode, session.theme);
+    await requestReply(session.id, next, session.mode, session.theme);
   };
 
   const openFromDrawer = (sessionId: string) => {
@@ -221,7 +228,10 @@ function ChatScreen() {
     router.push(`/chat?s=${sessionId}`);
   };
 
-  const startNewSession = async () => {
+  // The one point where the style is decided. It is fixed for the life of the
+  // session from here on, so it arrives as an argument rather than being read
+  // off whatever conversation happened to be open.
+  const startNewSession = async (nextMode: ChatMode) => {
     if (!user || creatingSession) return;
     setCreatingSession(true);
     try {
@@ -231,7 +241,7 @@ function ChatScreen() {
       const created = await createSession(user.uid, {
         title: "新しい壁打ち",
         theme,
-        mode,
+        mode: nextMode,
       });
       setDrawerOpen(false);
       router.push(`/chat?s=${created.id}`);
@@ -240,11 +250,6 @@ function ChatScreen() {
     } finally {
       setCreatingSession(false);
     }
-  };
-
-  const changeMode = (next: ChatMode) => {
-    setMode(next);
-    if (user && session) void updateSessionMeta(user.uid, session.id, { mode: next });
   };
 
   const endSession = async () => {
@@ -327,7 +332,7 @@ function ChatScreen() {
         />
       )}
 
-      {/* theme + tone switch */}
+      {/* theme + the tone this session was started in */}
       <div
         style={{
           padding: "12px 16px 10px",
@@ -335,7 +340,7 @@ function ChatScreen() {
           background: T.paper,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
@@ -358,6 +363,8 @@ function ChatScreen() {
           </button>
           <div
             style={{
+              flex: 1,
+              minWidth: 0,
               fontSize: 11,
               color: T.sub,
               overflow: "hidden",
@@ -367,34 +374,20 @@ function ChatScreen() {
           >
             今日のテーマ: {session.theme || theme}
           </div>
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {MODES.map((m) => {
-            const active = mode === m.id;
-            const c = m.id === "karakuchi" ? T.karakuchi : T.primary;
-            const soft = m.id === "karakuchi" ? T.karakuchiSoft : T.primarySoft;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => changeMode(m.id)}
-                aria-pressed={active}
-                style={{
-                  flex: 1,
-                  padding: "7px 0",
-                  borderRadius: 9,
-                  fontSize: 11.5,
-                  fontWeight: 700,
-                  border: `1.5px solid ${active ? c : T.line}`,
-                  background: active ? soft : T.paper,
-                  color: active ? c : T.sub,
-                  cursor: "pointer",
-                }}
-              >
-                {m.label}
-              </button>
-            );
-          })}
+          {/* Read-only: which tone this 壁打ち was started in. */}
+          <div
+            style={{
+              flexShrink: 0,
+              fontSize: 10,
+              fontWeight: 700,
+              color: accent,
+              background: mode === "karakuchi" ? T.karakuchiSoft : T.primarySoft,
+              padding: "3px 9px",
+              borderRadius: 999,
+            }}
+          >
+            {MODE_LABELS[mode]}
+          </div>
         </div>
       </div>
 
@@ -417,7 +410,7 @@ function ChatScreen() {
               borderRadius: 999,
             }}
           >
-            トーンが変わっても、深掘りの段数は変わりません(全モード共通)
+            モードで変わるのは言い方だけ。深掘りの段数はどのモードでも同じです
           </span>
         </div>
 
