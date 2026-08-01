@@ -1,11 +1,27 @@
 import { GoogleGenAI } from "@google/genai";
+import {
+  historyWindow,
+  HISTORY_RALLIES,
+  parseMessages,
+  type WireMessage,
+} from "./transcript";
 
 /**
- * Server-only Gemini client.
+ * Server-only Gemini client — the rollback path, no longer wired to any route.
+ *
+ * The 壁打ち runs on Claude (lib/server/anthropic.ts) since the Gemini free
+ * tier's per-day cap started being hit in normal use. This file is kept intact
+ * so switching back is an import change rather than a rewrite; the offline
+ * checks in scripts/check-gemini-guards.mjs still exercise it.
  *
  * GEMINI_API_KEY has no NEXT_PUBLIC_ prefix on purpose: it must never reach the
  * browser, so every call goes through a route handler.
  */
+
+// The transcript handling is provider-neutral and now lives on its own. Kept
+// re-exported here so this file reads — and can be re-adopted — as one piece.
+export { historyWindow, HISTORY_RALLIES, parseMessages };
+export type { WireMessage };
 
 let client: GoogleGenAI | undefined;
 
@@ -28,93 +44,12 @@ export function getGemini(): GoogleGenAI {
 export const CHAT_MODEL = "gemini-2.5-flash";
 export const EXTRACT_MODEL = "gemini-2.5-flash";
 
-/** One transcript line, in the shape both route handlers accept. */
-export type WireMessage = { role: "user" | "ai"; text: string };
-
-const MAX_TEXT = 8000;
-const MAX_MESSAGES = 40;
-
-/**
- * Coerce whatever the client posted into a transcript, dropping anything
- * malformed. The browser is not a trusted source even when the student is.
- */
-export function parseMessages(value: unknown): WireMessage[] {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .filter(
-      (m): m is WireMessage =>
-        !!m &&
-        typeof m === "object" &&
-        (m as WireMessage).role !== undefined &&
-        typeof (m as WireMessage).text === "string",
-    )
-    .map((m) => ({
-      role: m.role === "ai" ? ("ai" as const) : ("user" as const),
-      text: m.text.slice(0, MAX_TEXT),
-    }))
-    .filter((m) => m.text.trim().length > 0)
-    .slice(-MAX_MESSAGES);
-}
-
 /** Gemini calls the assistant side "model"; the app calls it "ai". */
 export function toGeminiContents(messages: WireMessage[]) {
   return messages.map((m) => ({
     role: m.role === "ai" ? "model" : "user",
     parts: [{ text: m.text }],
   }));
-}
-
-// ---------------------------------------------------------------------------
-// What gets sent to the model
-// ---------------------------------------------------------------------------
-
-/**
- * How many 往復 of history the 壁打ち sends.
- *
- * Measured against gemini-2.5-flash with real-length turns: a rally costs about
- * 160 input tokens, and the system prompt about 500. Twelve rallies is roughly
- * 2,400 tokens per request — far under any limit, and well past the three rungs
- * of the depth ladder (事実 → なぜ → 価値観) that a reply actually reasons over.
- * The theme lives in the system prompt, so dropping the oldest turns does not
- * lose what the conversation is about.
- *
- * Firestore keeps every turn regardless; this bounds only the request.
- */
-export const HISTORY_RALLIES = 12;
-
-/**
- * A second bound, on characters rather than turns.
- *
- * MAX_TEXT allows 8,000 characters per message, so twelve rallies could in
- * principle be 190,000 characters. Japanese runs about two characters per
- * token here, making this budget roughly 12,000 tokens.
- */
-const HISTORY_CHAR_BUDGET = 24_000;
-
-/**
- * The tail of the transcript, as a sliding window.
- *
- * Trimmed from the oldest end: the newest turn is the one being answered, so it
- * is the last thing that may be dropped. A single turn longer than the whole
- * budget is still sent — refusing to answer it would be worse than a large
- * request.
- */
-export function historyWindow(
-  messages: WireMessage[],
-  rallies: number = HISTORY_RALLIES,
-): WireMessage[] {
-  const recent = messages.slice(-rallies * 2);
-
-  let chars = 0;
-  let start = recent.length;
-  for (let i = recent.length - 1; i >= 0; i -= 1) {
-    chars += recent[i].text.length;
-    if (chars > HISTORY_CHAR_BUDGET && i < recent.length - 1) break;
-    start = i;
-  }
-
-  return recent.slice(start);
 }
 
 // ---------------------------------------------------------------------------

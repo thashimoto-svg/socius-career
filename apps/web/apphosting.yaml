@@ -63,14 +63,30 @@ env:
       - BUILD
       - RUNTIME
 
-  # ---- Gemini ----
+  # ---- Claude (Anthropic) ----
   # Server-only, and the browser must never see it, so it lives in Cloud Secret
-  # Manager and is granted at RUNTIME only. Rotate the value with:
-  #   firebase apphosting:secrets:set GEMINI_API_KEY
+  # Manager and is granted at RUNTIME only. Create or rotate the value with:
+  #   firebase apphosting:secrets:set ANTHROPIC_API_KEY
   #
   # The secret is deliberately named after the variable: `secrets:set` offers to
   # append an entry to this file unless one already matches by name, so keeping
   # them identical stops a rotation from duplicating the block below.
+  - variable: ANTHROPIC_API_KEY
+    secret: ANTHROPIC_API_KEY
+    availability:
+      - RUNTIME
+
+  # Which model answers. Here rather than hard-coded so the 壁打ち can be moved
+  # up or down a tier without a code change.
+  - variable: CHAT_MODEL
+    value: claude-sonnet-4-6
+    availability:
+      - RUNTIME
+
+  # ---- Gemini (rollback path) ----
+  # No route reads this any more; lib/server/gemini.ts is kept so switching back
+  # is an import change. The secret stays provisioned so that switch does not
+  # also need a secret to be recreated.
   - variable: GEMINI_API_KEY
     secret: GEMINI_API_KEY
     availability:

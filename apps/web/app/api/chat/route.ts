@@ -1,3 +1,4 @@
+import type { MessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import {
   buildChatSystemPrompt,
   buildOpeningInstruction,
@@ -6,14 +7,14 @@ import {
 } from "@socius/prompts";
 import { isRateLimited, verifyRequestUid } from "@/lib/server/auth";
 import {
-  callGemini,
+  callAnthropic,
+  CHAT_MAX_TOKENS,
   CHAT_MODEL,
-  getGemini,
-  historyWindow,
-  isGeminiFailure,
-  parseMessages,
-  toGeminiContents,
-} from "@/lib/server/gemini";
+  getAnthropic,
+  isAiFailure,
+  toAnthropicMessages,
+} from "@/lib/server/anthropic";
+import { historyWindow, parseMessages } from "@/lib/server/transcript";
 
 /**
  * One turn of the 壁打ち.
@@ -48,6 +49,13 @@ function parseProfile(value: unknown): PromptProfile | null {
   };
 }
 
+/** The text carried by one stream event, or "" for the events that carry none. */
+function deltaText(event: MessageStreamEvent): string {
+  return event.type === "content_block_delta" && event.delta.type === "text_delta"
+    ? event.delta.text
+    : "";
+}
+
 export async function POST(request: Request) {
   const uid = await verifyRequestUid(request);
   if (!uid) {
@@ -76,63 +84,69 @@ export async function POST(request: Request) {
   // first; there is no student turn to respond to yet.
   const opening = messages.length === 0;
 
-  let stream: AsyncGenerator<{ text?: string }>;
+  let stream: Awaited<ReturnType<typeof openStream>>["stream"];
+  let events: AsyncIterator<MessageStreamEvent>;
   let first: string;
 
-  // The first chunk is pulled before any response is returned, because once a
-  // streaming body is handed back the status code is already on the wire and
-  // a failure can only be shown as a truncated reply. Quota, auth and model
-  // errors all surface on this first pull, so the common failures still get a
-  // real status and a Japanese message the student can act on.
-  try {
-    const result = await callGemini("api/chat", async () => {
-      const started = await getGemini().models.generateContentStream({
-        model: CHAT_MODEL,
-        contents: opening
-          ? [{ role: "user", parts: [{ text: buildOpeningInstruction() }] }]
-          : // Only the tail of the conversation is sent. Firestore keeps all of
-            // it; what the model needs is the part it is answering.
-            toGeminiContents(historyWindow(messages)),
-        config: {
-          systemInstruction: buildChatSystemPrompt({ profile, mode, theme }),
-          temperature: 0.9,
-          maxOutputTokens: 800,
-          // A coaching question does not need a long deliberation, and latency
-          // between turns is what makes a 壁打ち feel like a conversation.
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      });
+  /**
+   * Start the turn and pull its first piece of text.
+   *
+   * The first chunk is taken before any response is returned, because once a
+   * streaming body is handed back the status code is already on the wire and a
+   * failure can only be shown as a truncated reply. Rate limits, overload and
+   * auth errors all surface on this first pull, so the common failures still
+   * get a real status and a Japanese message the student can act on.
+   */
+  async function openStream() {
+    const started = getAnthropic().messages.stream({
+      model: CHAT_MODEL,
+      max_tokens: CHAT_MAX_TOKENS,
+      system: buildChatSystemPrompt({ profile, mode, theme }),
+      messages: opening
+        ? [{ role: "user", content: buildOpeningInstruction() }]
+        : // Only the tail of the conversation is sent. Firestore keeps all of
+          // it; what the model needs is the part it is answering.
+          toAnthropicMessages(historyWindow(messages)),
+    });
 
-      // Driven with next() rather than `for await`, because breaking out of a
-      // for-await loop closes the generator — the rest of the reply would be
-      // thrown away the moment the first chunk arrived.
-      //
-      // Pulled inside the retried call on purpose: a quota rejection surfaces
-      // here, on the first read, not from generateContentStream itself.
-      let head = "";
+    // Driven with next() rather than `for await`, because breaking out of a
+    // for-await loop closes the iterator — the rest of the reply would be
+    // thrown away the moment the first chunk arrived.
+    const iterator = started[Symbol.asyncIterator]();
+
+    let head = "";
+    try {
       for (;;) {
-        const { value, done } = await started.next();
+        const { value, done } = await iterator.next();
         if (done) break;
-        if (value.text) {
-          head = value.text;
+        const text = deltaText(value);
+        if (text) {
+          head = text;
           break;
         }
       }
+    } catch (e) {
+      started.abort();
+      throw e;
+    }
 
-      // A retry has to start from a fresh stream, so a spent one is closed
-      // rather than left for the next attempt to read from.
-      if (!head) {
-        await started.return?.(undefined);
-        throw new Error("empty first chunk");
-      }
+    // A retry has to start from a fresh stream, so a spent one is closed
+    // rather than left for the next attempt to read from.
+    if (!head) {
+      started.abort();
+      throw new Error("empty first chunk");
+    }
 
-      return { stream: started, head };
-    });
+    return { stream: started, iterator, head };
+  }
 
+  try {
+    const result = await callAnthropic("api/chat", openStream);
     stream = result.stream;
+    events = result.iterator;
     first = result.head;
   } catch (e) {
-    if (isGeminiFailure(e)) {
+    if (isAiFailure(e)) {
       return Response.json(
         { error: e.message },
         {
@@ -158,17 +172,20 @@ export async function POST(request: Request) {
         for (;;) {
           // A student who navigates away mid-reply should not keep the
           // generation running against their quota.
-          if (request.signal.aborted) break;
-          const { value, done } = await stream.next();
+          if (request.signal.aborted) {
+            stream.abort();
+            break;
+          }
+          const { value, done } = await events.next();
           if (done) break;
-          if (value.text) controller.enqueue(encoder.encode(value.text));
+          const text = deltaText(value);
+          if (text) controller.enqueue(encoder.encode(text));
         }
       } catch (e) {
         // Nothing can be said in-band at this point; the client keeps the
         // partial reply rather than losing the turn.
         console.error("[api/chat] stream interrupted", e);
       } finally {
-        await stream.return?.(undefined);
         controller.close();
       }
     },

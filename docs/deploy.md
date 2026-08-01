@@ -1,7 +1,7 @@
 # デプロイ手順(Firebase App Hosting)
 
 本番は **Firebase App Hosting**(Firebase Hosting の Web フレームワーク向け製品)に上げる。
-`/api/chat` と `/api/extract` はサーバー側で `GEMINI_API_KEY` を使う route handler なので、
+`/api/chat` と `/api/extract` はサーバー側で `ANTHROPIC_API_KEY` を使う route handler なので、
 静的ホスティングだけでは動かない。App Hosting は Cloud Run 上で Next.js をそのまま動かすため、
 壁打ちのストリーミング応答もそのまま通る。
 
@@ -83,20 +83,23 @@ firebase apphosting:backends:create \
 これがローカルソースからデプロイするための形。`-a` で既存の web アプリを指定しないと、
 バックエンド名の新しい web アプリが勝手に作られる。
 
-### 3. Gemini API キーを Secret Manager に入れる
+### 3. API キーを Secret Manager に入れる
 
 ```bash
 cd apps/web
-firebase apphosting:secrets:set GEMINI_API_KEY --project socius-career-web
+firebase apphosting:secrets:set ANTHROPIC_API_KEY --project socius-career-web
 ```
 
-プロンプトに `apps/web/.env.local` の `GEMINI_API_KEY` の値を貼る。
+プロンプトに `apps/web/.env.local` の `ANTHROPIC_API_KEY` の値を貼る。
 `apphosting.yaml` はこのシークレットを名前で参照していて、RUNTIME にだけ渡す。
 ビルド時には渡らないので、クライアントバンドルに焼き込まれることはない。
 
 バックエンドを先に作っておくこと。バックエンドが無い状態だと、シークレットを読む
 サービスアカウントが決まらず IAM 付与がスキップされる
-(あとから `firebase apphosting:secrets:grantaccess GEMINI_API_KEY --backend socius-career-web` で復旧できる)。
+(あとから `firebase apphosting:secrets:grantaccess ANTHROPIC_API_KEY --backend socius-career-web` で復旧できる)。
+
+`GEMINI_API_KEY` は切り戻し用に登録したままにしてある。`apphosting.yaml` からも
+参照は残っているが、どのルートも読んでいない。
 
 ### 4. Firebase Auth の承認済みドメインに本番ドメインを追加
 
@@ -131,7 +134,27 @@ firebase deploy --project socius-career-web
 - サーバー専用の秘密 = `firebase apphosting:secrets:set <name>` で登録し、`secret:` で参照。
   `availability` は `RUNTIME` のみにする。
 
-## Gemini の利用枠 — ここが実機テストを止めた
+## モデルの選択
+
+どのモデルが答えるかは `CHAT_MODEL`(未設定なら `claude-sonnet-4-6`)で決まる。
+抽出だけ別のモデルにしたいときは `EXTRACT_MODEL`。どちらも `apphosting.yaml` の
+`value:` に直書きでよい——秘密ではないので Secret Manager には入れない。
+
+ルートは `temperature` も `thinking` も送っていない。どちらもモデルによって
+受け付ける値が違い(`temperature` は Opus 4.7 以降で 400 になる)、送ると
+`CHAT_MODEL` が嘘になるため。どのモデルを入れても通る形にしてある。
+
+検証:
+
+```bash
+cd apps/web
+npm run check:claude          # 枠を消費しない。分類・リトライ・履歴変換の検査
+```
+
+## Gemini の利用枠 — ここが実機テストを止めた(移行前の記録)
+
+以下は Claude に移行する理由になった事象の記録。`lib/server/gemini.ts` を
+戻すときはここを読み直すこと。
 
 `GEMINI_API_KEY` が無料枠のキーだと、`gemini-2.5-flash` に対する上限は
 **プロジェクトあたり 1 日 20 リクエスト / 1 分 5 リクエスト**しかない

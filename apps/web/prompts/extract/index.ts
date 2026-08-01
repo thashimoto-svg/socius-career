@@ -58,8 +58,51 @@ ${log}
 }
 
 /**
- * Response schema for the extraction call. Plain strings rather than the SDK's
- * `Type` enum so this package stays independent of @google/genai.
+ * The extraction call, as a tool Claude is forced to call.
+ *
+ * A tool rather than `output_config.format`: structured outputs are only
+ * available on part of the model range, and CHAT_MODEL is an environment
+ * variable, so the route has to work on whatever is put there. Forced tool use
+ * gets a schema-validated object out of every model that can call tools at all.
+ */
+export const EPISODE_TOOL_NAME = "save_episode";
+
+export const EPISODE_TOOL_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      description: "学生の言葉を使った25字以内の一文。体言止めでよい。",
+    },
+    tag: { type: "string", enum: [...EPISODE_TAGS] },
+    emotion: {
+      type: "string",
+      description: "語られた感情の変化を「悔しさ → 手応え」の形で。なければ空文字。",
+    },
+    star: {
+      type: "object",
+      properties: {
+        S: { type: "string", description: "状況 — いつ、どんな場面だったか" },
+        T: { type: "string", description: "課題 — 何を目指した / 求められたか" },
+        A: { type: "string", description: "行動 — 実際に何をしたか" },
+        R: { type: "string", description: "結果 — 何が起きたか" },
+      },
+      required: ["S", "T", "A", "R"],
+      additionalProperties: false,
+    },
+    learn: {
+      type: "string",
+      description: "学生自身が言葉にした学び。語られていなければ空文字。",
+    },
+  },
+  required: ["title", "tag", "emotion", "star", "learn"],
+  additionalProperties: false,
+} as const;
+
+/**
+ * The same schema in Gemini's dialect, for the rollback path in
+ * lib/server/gemini.ts. Plain strings rather than the SDK's `Type` enum so this
+ * file stays independent of @google/genai.
  */
 export const EPISODE_RESPONSE_SCHEMA = {
   type: "OBJECT",
