@@ -13,7 +13,7 @@ import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema
 import { openChat, appendMessage, updateSessionMeta, type OpenedChat } from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
 import { startChat } from "@/lib/new-chat";
-import { postStream } from "@/lib/api-client";
+import { ApiError, postStream } from "@/lib/api-client";
 import { fs, T } from "@/lib/theme";
 
 export default function ChatPage() {
@@ -104,7 +104,12 @@ function ChatScreen() {
         setMessages((prev) => [...prev, saved]);
       } catch (e) {
         setError(e instanceof Error ? e.message : "応答に失敗しました。");
-        setFailedTurn({ sessionId, transcript, tone, theme });
+        // 再送 only where sending it again could work. The daily cap will fail
+        // the same way until the date changes, and a button that promises
+        // otherwise is worse than no button.
+        if (!(e instanceof ApiError) || e.retryable) {
+          setFailedTurn({ sessionId, transcript, tone, theme });
+        }
       } finally {
         setThinking(false);
         setStreaming("");

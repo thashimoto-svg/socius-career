@@ -5,7 +5,7 @@ import {
   type PromptProfile,
   type ToneId,
 } from "@socius/prompts";
-import { isRateLimited, verifyRequestUid } from "@/lib/server/auth";
+import { isRateLimited, verifyRequest } from "@/lib/server/auth";
 import {
   callAnthropic,
   CHAT_MAX_TOKENS,
@@ -15,6 +15,12 @@ import {
   toAnthropicMessages,
 } from "@/lib/server/anthropic";
 import { historyWindow, parseMessages } from "@/lib/server/transcript";
+import {
+  checkDailyLimit,
+  DAILY_LIMIT_MESSAGE,
+  usageDay,
+  writeUsage,
+} from "@/lib/server/usage";
 
 /**
  * One turn of the 壁打ち.
@@ -57,10 +63,12 @@ function deltaText(event: MessageStreamEvent): string {
 }
 
 export async function POST(request: Request) {
-  const uid = await verifyRequestUid(request);
-  if (!uid) {
+  const caller = await verifyRequest(request);
+  if (!caller) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
+  const { uid, idToken } = caller;
+
   if (isRateLimited(uid)) {
     return Response.json(
       { error: "少し早すぎるようです。数秒おいてからもう一度お試しください。" },
@@ -83,6 +91,22 @@ export async function POST(request: Request) {
   // An empty transcript means the session is brand new and the AI speaks
   // first; there is no student turn to respond to yet.
   const opening = messages.length === 0;
+
+  // The opening line is not charged. It is the app talking, and a student who
+  // opened three threads and typed in none of them has not used anything.
+  const day = usageDay();
+  const usage = opening
+    ? { allowed: true, next: 0 }
+    : await checkDailyLimit(uid, idToken, day);
+
+  if (!usage.allowed) {
+    return Response.json(
+      // Not retryable, so the client shows this instead of a 再送 button that
+      // would fail the same way until the date changes.
+      { error: DAILY_LIMIT_MESSAGE, retryable: false },
+      { status: 429 },
+    );
+  }
 
   let stream: Awaited<ReturnType<typeof openStream>>["stream"];
   let events: AsyncIterator<MessageStreamEvent>;
@@ -145,6 +169,16 @@ export async function POST(request: Request) {
     stream = result.stream;
     events = result.iterator;
     first = result.head;
+
+    // Charged once the model has actually started answering, so a turn that
+    // failed on quota or a bad key does not come out of the student's day.
+    // Not awaited — the reply is already coming, and the counter must not put
+    // a Firestore round trip in front of it.
+    if (usage.next > 0) {
+      void writeUsage(uid, idToken, day, usage.next).catch((e) =>
+        console.error("[usage] could not record the turn", e),
+      );
+    }
   } catch (e) {
     if (isAiFailure(e)) {
       return Response.json(

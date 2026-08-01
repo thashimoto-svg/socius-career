@@ -10,12 +10,33 @@ import type { User } from "firebase/auth";
  */
 export class ApiError extends Error {
   readonly status: number;
+  /**
+   * Whether sending the same request again could work.
+   *
+   * False for the daily cap: offering 再送 for something that will fail the
+   * same way until the date changes is the dead end 「AIの応答に失敗しました」
+   * used to be. Routes opt out explicitly; everything else is worth retrying.
+   */
+  readonly retryable: boolean;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, retryable = true) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.retryable = retryable;
   }
+}
+
+type ErrorPayload = { error?: string; retryable?: boolean } | null;
+
+const FALLBACK_ERROR = "通信に失敗しました。時間をおいてもう一度お試しください。";
+
+function toApiError(status: number, payload: ErrorPayload): ApiError {
+  return new ApiError(
+    status,
+    payload?.error ?? FALLBACK_ERROR,
+    payload?.retryable !== false,
+  );
 }
 
 export async function postJson<T>(path: string, user: User, body: unknown): Promise<T> {
@@ -30,16 +51,9 @@ export async function postJson<T>(path: string, user: User, body: unknown): Prom
     body: JSON.stringify(body),
   });
 
-  const payload = (await res.json().catch(() => null)) as {
-    error?: string;
-  } | null;
+  const payload = (await res.json().catch(() => null)) as ErrorPayload;
 
-  if (!res.ok) {
-    throw new ApiError(
-      res.status,
-      payload?.error ?? "通信に失敗しました。時間をおいてもう一度お試しください。",
-    );
-  }
+  if (!res.ok) throw toApiError(res.status, payload);
 
   return payload as T;
 }
@@ -71,11 +85,7 @@ export async function postStream(
   if (!res.ok || !res.body) {
     // Failures are still sent as JSON, because the status is decided before
     // the first chunk of a successful reply is written.
-    const payload = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new ApiError(
-      res.status,
-      payload?.error ?? "通信に失敗しました。時間をおいてもう一度お試しください。",
-    );
+    throw toApiError(res.status, (await res.json().catch(() => null)) as ErrorPayload);
   }
 
   const reader = res.body.getReader();

@@ -83,6 +83,13 @@ env:
     availability:
       - RUNTIME
 
+  # How many messages one student may send per day, in Japan time. Not a
+  # secret, and the number is worth being able to see in the repository.
+  - variable: DAILY_MESSAGE_LIMIT
+    value: "50"
+    availability:
+      - RUNTIME
+
   # ---- Gemini (rollback path) ----
   # No route reads this any more; lib/server/gemini.ts is kept so switching back
   # is an import change. The secret stays provisioned so that switch does not

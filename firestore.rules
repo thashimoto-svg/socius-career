@@ -64,6 +64,26 @@ service cloud.firestore {
         }
       }
 
+      // Today's message count, one document per day.
+      //
+      // Written by the server (app/api/chat) through the Firestore REST API
+      // carrying this student's own ID token — the route handlers hold no
+      // Firestore credentials, so there is no privileged identity to write as.
+      // These rules are what make that safe: the counter may be created at 1
+      // and then only ever incremented by exactly one, and nothing may delete
+      // it. A student can spend their own budget faster. They cannot get it
+      // back, which is the only thing worth defending here.
+      match /usage/{day} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid)
+          && incoming().keys().hasOnly(['count', 'updatedAt'])
+          && incoming().count == 1;
+        allow update: if isOwner(uid)
+          && incoming().keys().hasOnly(['count', 'updatedAt'])
+          && incoming().count == resource.data.count + 1;
+        allow delete: if false;
+      }
+
       // Appearance preferences. Kept out of the user document so that changing
       // the font size does not touch identity or the onboarding answers, which
       // are what the 壁打ち prompt is built from.

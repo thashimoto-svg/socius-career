@@ -17,6 +17,7 @@ import {
   toAnthropicMessages,
 } from "../lib/server/anthropic.ts";
 import { historyWindow, parseMessages } from "../lib/server/transcript.ts";
+import { DAILY_MESSAGE_LIMIT, usageDay } from "../lib/server/usage.ts";
 
 let failures = 0;
 
@@ -164,6 +165,24 @@ check("最新の発言は必ず残る", historyWindow(long).at(-1).text === long
 eq("配列でなければ空", parseMessages("nope").length, 0);
 eq("空白だけの発言は落ちる", parseMessages([{ role: "user", text: "   " }]).length, 0);
 eq("40件を超える履歴は切られる", parseMessages(long).length, 40);
+
+// ---------------------------------------------------------------------------
+console.log("\n日次上限 — 「明日」は読む人にとっての明日");
+// ---------------------------------------------------------------------------
+
+eq("DAILY_MESSAGE_LIMIT の既定は50", DAILY_MESSAGE_LIMIT, 50);
+
+// 14:59:59Z は日本時間の 23:59:59。UTC で日付を切ると、日本の学生の上限は
+// 毎朝9時にリセットされることになる。
+eq("JST 23:59 はまだ当日", usageDay(new Date("2026-08-01T14:59:59Z")), "2026-08-01");
+eq("JST 00:00 で翌日になる", usageDay(new Date("2026-08-01T15:00:00Z")), "2026-08-02");
+eq("JST 正午は素直に当日", usageDay(new Date("2026-08-01T03:00:00Z")), "2026-08-01");
+check(
+  "ドキュメントIDの形は YYYY-MM-DD",
+  /^\d{4}-\d{2}-\d{2}$/.test(usageDay(new Date("2026-12-31T20:00:00Z"))),
+  usageDay(new Date("2026-12-31T20:00:00Z")),
+);
+eq("年またぎも日本時間で判定する", usageDay(new Date("2026-12-31T20:00:00Z")), "2027-01-01");
 
 console.log(`\n  info モデル: ${CHAT_MODEL}`);
 console.log(

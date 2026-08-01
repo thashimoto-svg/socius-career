@@ -20,11 +20,19 @@ const JWKS = createRemoteJWKSet(
   ),
 );
 
+/** A verified caller: who they are, and the token that proved it. */
+export type VerifiedCaller = { uid: string; idToken: string };
+
 /**
- * Returns the caller's uid, or null if the request is not a signed-in student.
+ * Returns the caller, or null if the request is not a signed-in student.
  * Never throws — an unverifiable token is a 401, not a 500.
+ *
+ * The token comes back as well as the uid because the daily-usage counter is
+ * read and written through the Firestore REST API on the student's own
+ * authority (see lib/server/usage.ts). Keeping this route free of Firestore
+ * credentials is the reason that works the way it does.
  */
-export async function verifyRequestUid(request: Request): Promise<string | null> {
+export async function verifyRequest(request: Request): Promise<VerifiedCaller | null> {
   if (!PROJECT_ID) return null;
 
   const header = request.headers.get("authorization") ?? "";
@@ -38,13 +46,17 @@ export async function verifyRequestUid(request: Request): Promise<string | null>
       algorithms: ["RS256"],
     });
 
-    // Firebase puts the uid in `sub`; `auth_time` in the future would mean a
-    // token minted by something other than a real sign-in.
+    // Firebase puts the uid in `sub`.
     const uid = typeof payload.sub === "string" ? payload.sub : null;
-    return uid && uid.length > 0 ? uid : null;
+    return uid && uid.length > 0 ? { uid, idToken: token } : null;
   } catch {
     return null;
   }
+}
+
+/** The uid alone, for the callers that have no use for the token. */
+export async function verifyRequestUid(request: Request): Promise<string | null> {
+  return (await verifyRequest(request))?.uid ?? null;
 }
 
 /**
