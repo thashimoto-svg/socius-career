@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { EPISODE_PERIODS, type EpisodePeriod } from "@socius/prompts";
 import { AppHeader } from "@/components/AppHeader";
+import { JibunshiTimeline } from "@/components/JibunshiTimeline";
 import { useAuth } from "@/lib/firebase/auth-context";
 import {
   deleteEpisode,
@@ -9,7 +11,16 @@ import {
   updateEpisode,
 } from "@/lib/firebase/episodes";
 import type { Episode, Star } from "@/lib/firebase/schema";
+import { bucketByPeriod } from "@/lib/jibunshi-periods";
 import { T } from "@/lib/theme";
+
+/** What an edit can change. The AI's tag and emotion are not the student's to retype. */
+type EpisodePatch = {
+  title: string;
+  period: EpisodePeriod;
+  star: Star;
+  learn: string;
+};
 
 const STAR_LABELS: { key: keyof Star; label: string }[] = [
   { key: "S", label: "状況" },
@@ -27,6 +38,8 @@ export default function JibunshiPage() {
   const [error, setError] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Where each card ended up, so the timeline above can send the student to one.
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
 
   useEffect(() => {
     if (!user) return;
@@ -47,10 +60,18 @@ export default function JibunshiPage() {
     };
   }, [user]);
 
-  const handleSave = async (
-    id: string,
-    patch: { title: string; star: Star; learn: string },
-  ) => {
+  /** Open the card the student picked off the timeline, and go to it. */
+  const revealEpisode = (id: string) => {
+    setOpenId(id);
+    setEditingId(null);
+    // Next frame: the card has to have expanded before its position is worth
+    // scrolling to, or the student lands above it and has to scroll again.
+    requestAnimationFrame(() => {
+      cardRefs.current.get(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const handleSave = async (id: string, patch: EpisodePatch) => {
     if (!user) return;
     // Optimistic: the student just typed these words, so showing them straight
     // away is more honest than a spinner over their own text.
@@ -73,14 +94,30 @@ export default function JibunshiPage() {
       <AppHeader title="自分史" />
       {/* The shell no longer scrolls, so every screen owns the panel that does. */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
-      <p style={{ fontSize: 11.5, color: T.sub, margin: "0 0 14px" }}>
+      <p style={{ fontSize: 11.5, color: T.sub, margin: "0 0 16px" }}>
         ここにある言葉は、すべてあなた自身が話したことです。
       </p>
 
       {error && (
-        <div role="alert" style={{ fontSize: 12, color: T.karakuchi, lineHeight: 1.9 }}>
+        <div
+          role="alert"
+          style={{ fontSize: 12, color: T.karakuchi, lineHeight: 1.9, marginBottom: 14 }}
+        >
           エピソードを読み込めませんでした。ページを再読み込みしてください。
         </div>
+      )}
+
+      {/*
+        The year table comes first, and is drawn whether or not there is
+        anything to put on it. A student with nothing saved should see the shape
+        of what they are filling in, not a screen that says まだありません.
+      */}
+      {!error && (
+        <JibunshiTimeline
+          buckets={bucketByPeriod(episodes ?? [])}
+          onPick={revealEpisode}
+          loading={episodes === null}
+        />
       )}
 
       {!error && episodes === null && (
@@ -89,12 +126,19 @@ export default function JibunshiPage() {
 
       {!error && episodes?.length === 0 && (
         <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.9 }}>
-          まだエピソードはありません。
-          <br />
           壁打ちで具体的な出来事を話すと、
           <br />
-          あなたの言葉がここに STAR で並びます。
+          あなたの言葉がこの年表に STAR で並びます。
         </div>
+      )}
+
+      {episodes && episodes.length > 0 && (
+        <h2
+          className="sc-display"
+          style={{ fontSize: 13, fontWeight: 700, margin: "0 0 10px", color: T.ink }}
+        >
+          エピソード
+        </h2>
       )}
 
       {episodes?.map((e) => {
@@ -103,12 +147,19 @@ export default function JibunshiPage() {
         return (
           <div
             key={e.id}
+            ref={(node) => {
+              if (node) cardRefs.current.set(e.id, node);
+              else cardRefs.current.delete(e.id);
+            }}
             style={{
               background: T.paper,
               border: `1px solid ${isOpen ? T.gold : T.line}`,
               borderLeft: `4px solid ${T.gold}`,
               borderRadius: 14,
               marginBottom: 12,
+              // The card is what the timeline scrolls to, so it must not land
+              // flush against the header.
+              scrollMarginTop: 12,
               overflow: "hidden",
             }}
           >
@@ -126,7 +177,15 @@ export default function JibunshiPage() {
                 cursor: "pointer",
               }}
             >
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  marginBottom: 4,
+                }}
+              >
                 <span
                   style={{
                     fontSize: 10,
@@ -139,7 +198,23 @@ export default function JibunshiPage() {
                 >
                   {e.tag}
                 </span>
-                <span style={{ fontSize: 10, color: T.sub }}>感情: {e.emotion}</span>
+                {/* 不明 is shown rather than hidden: it is the one thing on the
+                    card the student can fix, and 編集する is right below. */}
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: e.period === "不明" ? T.sub : "#8a6420",
+                    background: e.period === "不明" ? T.bg : T.goldSoft,
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                  }}
+                >
+                  {e.period === "不明" ? "時期未設定" : e.period}
+                </span>
+                {e.emotion && (
+                  <span style={{ fontSize: 10, color: T.sub }}>感情: {e.emotion}</span>
+                )}
               </div>
               <div className="sc-display" style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>
                 {e.title}
@@ -268,9 +343,10 @@ function EpisodeEditor({
 }: {
   episode: Episode;
   onCancel: () => void;
-  onSave: (patch: { title: string; star: Star; learn: string }) => void;
+  onSave: (patch: EpisodePatch) => void;
 }) {
   const [title, setTitle] = useState(episode.title);
+  const [period, setPeriod] = useState<EpisodePeriod>(episode.period);
   const [star, setStar] = useState<Star>(episode.star);
   const [learn, setLearn] = useState(episode.learn);
 
@@ -280,6 +356,30 @@ function EpisodeEditor({
         タイトル
       </label>
       <input value={title} onChange={(ev) => setTitle(ev.target.value)} style={fieldStyle} />
+
+      {/*
+        Extraction only records a period when the student said one out loud, so
+        a card that arrived as 時期未設定 has nowhere to sit on the year table
+        until someone places it. This is that someone.
+      */}
+      <label
+        htmlFor={`period-${episode.id}`}
+        style={{ display: "block", fontSize: 10, color: T.sub, margin: "10px 0 4px" }}
+      >
+        時期
+      </label>
+      <select
+        id={`period-${episode.id}`}
+        value={period}
+        onChange={(ev) => setPeriod(ev.target.value as EpisodePeriod)}
+        style={{ ...fieldStyle, resize: undefined }}
+      >
+        {EPISODE_PERIODS.map((p) => (
+          <option key={p} value={p}>
+            {p === "不明" ? "時期未設定" : p}
+          </option>
+        ))}
+      </select>
 
       {STAR_LABELS.map(({ key, label }) => (
         <div key={key} style={{ marginTop: 10 }}>
@@ -310,7 +410,7 @@ function EpisodeEditor({
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button
           type="button"
-          onClick={() => onSave({ title, star, learn })}
+          onClick={() => onSave({ title, period, star, learn })}
           style={{
             flex: 1,
             padding: "8px 0",
