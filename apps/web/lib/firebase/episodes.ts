@@ -8,6 +8,7 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
+import type { EpisodePeriod } from "@socius/prompts";
 import {
   episodeRef,
   episodesRef,
@@ -19,6 +20,7 @@ import {
 export type EpisodeDraft = {
   title: string;
   tag: string;
+  period: EpisodePeriod;
   emotion: string;
   star: Star;
   learn: string;

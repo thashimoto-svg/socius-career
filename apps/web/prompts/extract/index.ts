@@ -23,6 +23,30 @@ export const EPISODE_TAGS = [
 
 export type EpisodeTag = (typeof EPISODE_TAGS)[number];
 
+/**
+ * When it happened, in the only resolution a 自分史 needs.
+ *
+ * The timeline is the first thing the 自分史 shows, and a card cannot be placed
+ * on it without this. Ordered, and closed for the same reason the tags are:
+ * a scale invents itself into uselessness the moment 「大学2年の秋」 and
+ * 「2年生のとき」 become different rungs.
+ *
+ * 「不明」 is a real answer, not a failure. Students talk about what happened
+ * long before they mention which year it was, and a card placed on a guess is
+ * worse than one waiting to be placed.
+ */
+export const EPISODE_PERIODS = [
+  "高校以前",
+  "高校",
+  "大学1年",
+  "大学2年",
+  "大学3年",
+  "大学4年",
+  "不明",
+] as const;
+
+export type EpisodePeriod = (typeof EPISODE_PERIODS)[number];
+
 export const EXTRACTION_SYSTEM_PROMPT = `あなたは対話ログから、就活生のエピソードを STAR 形式に構造化する編集者です。
 文章を書く人ではありません。学生が実際に話した言葉を、正しい枠に入れ直すだけの役割です。
 
@@ -39,7 +63,11 @@ export const EXTRACTION_SYSTEM_PROMPT = `あなたは対話ログから、就活
 7. tag は次から最も近いものを1つだけ選ぶ。新しい言葉を作らない:
    ${EPISODE_TAGS.join(" / ")}
 8. emotion は学生が語った感情の変化を「悔しさ → 手応え」のように「A → B」の形で書く。
-   変化が語られていなければ空文字。感情そのものが語られていなければ空文字。`;
+   変化が語られていなければ空文字。感情そのものが語られていなければ空文字。
+9. period は出来事が起きた時期を次から1つ選ぶ:
+   ${EPISODE_PERIODS.join(" / ")}
+   学生が「高校2年のとき」「3年の春」のように語っていればそれに従う。
+   語られていなければ「不明」を選ぶ。学年や入学年から逆算して推測しない。`;
 
 /** One line of the transcript as the extractor sees it. */
 export type TranscriptLine = { role: "user" | "ai"; text: string };
@@ -123,6 +151,11 @@ export const EPISODE_TOOL_INPUT_SCHEMA = {
       description: "学生の言葉を使った25字以内の一文。体言止めでよい。",
     },
     tag: { type: "string", enum: [...EPISODE_TAGS] },
+    period: {
+      type: "string",
+      enum: [...EPISODE_PERIODS],
+      description: "出来事が起きた時期。語られていなければ「不明」。推測しない。",
+    },
     emotion: {
       type: "string",
       description: "語られた感情の変化を「悔しさ → 手応え」の形で。なければ空文字。",
@@ -143,7 +176,7 @@ export const EPISODE_TOOL_INPUT_SCHEMA = {
       description: "学生自身が言葉にした学び。語られていなければ空文字。",
     },
   },
-  required: ["title", "tag", "emotion", "star", "learn"],
+  required: ["title", "tag", "period", "emotion", "star", "learn"],
   additionalProperties: false,
 } as const;
 
@@ -157,6 +190,7 @@ export const EPISODE_RESPONSE_SCHEMA = {
   properties: {
     title: { type: "STRING" },
     tag: { type: "STRING", enum: EPISODE_TAGS },
+    period: { type: "STRING", enum: EPISODE_PERIODS },
     emotion: { type: "STRING" },
     star: {
       type: "OBJECT",
@@ -173,12 +207,13 @@ export const EPISODE_RESPONSE_SCHEMA = {
     },
     learn: { type: "STRING" },
   },
-  required: ["title", "tag", "emotion", "star", "learn"],
+  required: ["title", "tag", "period", "emotion", "star", "learn"],
 } as const;
 
 export type ExtractedEpisode = {
   title: string;
   tag: string;
+  period: EpisodePeriod;
   emotion: string;
   star: { S: string; T: string; A: string; R: string };
   learn: string;

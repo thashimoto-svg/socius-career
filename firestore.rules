@@ -68,7 +68,7 @@ service cloud.firestore {
         allow read, delete: if isOwner(uid);
         allow create, update: if isOwner(uid)
           && incoming().keys().hasOnly([
-               'title', 'tag', 'emotion', 'star', 'learn',
+               'title', 'tag', 'period', 'emotion', 'star', 'learn',
                'sessionId', 'createdAt', 'updatedAt'
              ])
           && incoming().title is string && incoming().title.size() <= 200

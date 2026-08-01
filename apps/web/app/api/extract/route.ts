@@ -1,12 +1,14 @@
 import type { Tool } from "@anthropic-ai/sdk/resources/messages";
 import {
   buildExtractionPrompt,
+  EPISODE_PERIODS,
   EPISODE_TAGS,
   EPISODE_TOOL_INPUT_SCHEMA,
   EPISODE_TOOL_NAME,
   EXTRACTION_SYSTEM_PROMPT,
   SKIP_TOOL_INPUT_SCHEMA,
   SKIP_TOOL_NAME,
+  type EpisodePeriod,
   type ExtractedEpisode,
 } from "@socius/prompts";
 import { isRateLimited, verifyRequestUid } from "@/lib/server/auth";
@@ -32,6 +34,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ALLOWED_TAGS: readonly string[] = EPISODE_TAGS;
+const ALLOWED_PERIODS: readonly string[] = EPISODE_PERIODS;
 
 /**
  * The one tool, and the only thing the model is allowed to do with this turn.
@@ -83,6 +86,11 @@ function normalize(raw: unknown): ExtractedEpisode | null {
   const episode: ExtractedEpisode = {
     title: str(r.title, 200),
     tag: ALLOWED_TAGS.includes(str(r.tag, 20)) ? str(r.tag, 20) : "その他",
+    // Anything off the scale lands in 不明 rather than being placed on the
+    // timeline at a guess. An unplaced card is honest; a misplaced one is not.
+    period: (ALLOWED_PERIODS.includes(str(r.period, 20))
+      ? str(r.period, 20)
+      : "不明") as EpisodePeriod,
     emotion: str(r.emotion, 100),
     star: {
       S: str(star.S, 1000),

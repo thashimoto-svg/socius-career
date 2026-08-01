@@ -11,6 +11,21 @@ UIイメージ(仕様確定用プロトタイプ)に付いていた開発用の�
 | ② 壁打ち | `/chat` | `apps/web/app/(main)/chat/page.tsx` |
 | ③ 履歴 | `/history` | `apps/web/app/(main)/history/page.tsx` |
 | ④ 自分史 | `/jibunshi` | `apps/web/app/(main)/jibunshi/page.tsx` |
+| ⑤ ホーム | `/home` | `apps/web/app/(main)/home/page.tsx` |
+
+## レイアウト(MTG 7/30)
+
+- タブは **ホーム / 壁打ち / 自分史** の3つ。履歴はタブから外し、全画面共通ヘッダーの
+  ☰ ドロワーからアクセスする——「どれだったか」を答えるだけの画面に、下部バーの
+  1/3 を常設する必要はない
+- ヘッダーは `components/AppHeader.tsx`。☰(履歴ドロワー)/ タイトル / ＋(新規壁打ち)を
+  全画面で常時表示する。会話の中からしか新規作成と過去参照に行けないのは、
+  どちらも「会話していないとき」に探すものなので逆だった
+- シェルは可視領域ちょうどの高さに固定する(`--sc-app-height`)。`100dvh` はキーボードを
+  勘定に入れない——iOS のレイアウトビューポートは縮まないため。縮むのは visual viewport の
+  ほうなので、そちらを読んで CSS 変数に流している(`components/viewport-height.tsx`)
+- `viewport-fit: cover` + `env(safe-area-inset-*)`。ヘッダーはノッチ、タブバーと
+  ドロワーはホームインジケータを避ける
 
 ## ① オンボーディング
 

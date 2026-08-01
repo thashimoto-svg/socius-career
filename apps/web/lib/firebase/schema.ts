@@ -1,3 +1,4 @@
+import { EPISODE_PERIODS, type EpisodePeriod } from "@socius/prompts";
 import {
   collection,
   doc,
@@ -84,6 +85,14 @@ export type Episode = {
   id: string;
   title: string;
   tag: string;
+  /**
+   * When it happened, on the 自分史's own scale — 「大学2年」 rather than a date.
+   *
+   * This is what places a card on the timeline. 「不明」 for the cards written
+   * before the field existed, and for the ones where the student told the story
+   * without ever saying which year it was.
+   */
+  period: EpisodePeriod;
   emotion: string;
   star: Star;
   learn: string;
@@ -170,6 +179,9 @@ export function toEpisode(id: string, d: DocumentData): Episode {
     id,
     title: typeof d.title === "string" ? d.title : "",
     tag: typeof d.tag === "string" ? d.tag : "",
+    period: (EPISODE_PERIODS as readonly string[]).includes(d.period)
+      ? (d.period as EpisodePeriod)
+      : "不明",
     emotion: typeof d.emotion === "string" ? d.emotion : "",
     star: {
       S: star.S ?? "",

@@ -1,4 +1,5 @@
 import type { User } from "firebase/auth";
+import type { EpisodePeriod } from "@socius/prompts";
 import { postJson } from "./api-client";
 import { createEpisode, listEpisodes, updateEpisode } from "./firebase/episodes";
 import { markExtracted } from "./firebase/sessions";
@@ -23,6 +24,7 @@ type ExtractReply = {
   episode: {
     title: string;
     tag: string;
+    period: EpisodePeriod;
     emotion: string;
     star: Star;
     learn: string;
