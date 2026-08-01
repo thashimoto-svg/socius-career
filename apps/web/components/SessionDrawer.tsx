@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { listSessions } from "@/lib/firebase/sessions";
-import { formatShortDate, type ChatMode, type Session } from "@/lib/firebase/schema";
+import { formatShortDate, type Session } from "@/lib/firebase/schema";
 import { T } from "@/lib/theme";
 
 type SessionDrawerProps = {
@@ -12,27 +12,15 @@ type SessionDrawerProps = {
   /** Highlighted in the list so the student can see where they are. */
   currentSessionId: string | null;
   onSelect: (sessionId: string) => void;
-  onNewSession: (mode: ChatMode) => void;
+  /**
+   * Starts a 壁打ち in the tone the student is already talking in. Picking a
+   * different one is the header menu's job now (MTG 7/30) — asking here as
+   * well would make every new conversation a two-step decision, and the
+   * question was being answered by whoever guessed fastest.
+   */
+  onNewSession: () => void;
   creating: boolean;
 };
-
-/**
- * The style choice, offered here because starting a 壁打ち is the only moment it
- * can be made (MTG 7/20). Wording is longer than the header's label on purpose:
- * this is where the student decides, so it has to say what it will feel like.
- */
-const MODE_CHOICES: { id: ChatMode; label: string; hint: string }[] = [
-  {
-    id: "counselor",
-    label: "じっくり(カウンセラー風)",
-    hint: "やわらかく受け止めてから聞かれる",
-  },
-  {
-    id: "karakuchi",
-    label: "ストレート(辛口)",
-    hint: "前置きなしで言葉の甘さを指摘される",
-  },
-];
 
 /**
  * Past 壁打ち, reachable from inside the conversation.
@@ -53,7 +41,6 @@ export function SessionDrawer({
 }: SessionDrawerProps) {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState(false);
-  const [choosingMode, setChoosingMode] = useState(false);
 
   // Re-read on every open: a session's title and updatedAt change as the
   // student talks, so a list cached from the last open would be stale.
@@ -63,7 +50,6 @@ export function SessionDrawer({
 
     setSessions(null);
     setError(false);
-    setChoosingMode(false);
     listSessions(uid)
       .then((rows) => {
         if (!cancelled) setSessions(rows);
@@ -152,97 +138,27 @@ export function SessionDrawer({
         </div>
 
         <div style={{ padding: "12px 12px 8px" }}>
-          {!choosingMode && (
-            <button
-              type="button"
-              onClick={() => setChoosingMode(true)}
-              disabled={creating}
-              style={{
-                width: "100%",
-                padding: "10px 0",
-                borderRadius: 11,
-                border: `1.5px solid ${T.primary}`,
-                background: T.primarySoft,
-                color: T.primary,
-                fontSize: 12.5,
-                fontWeight: 700,
-                opacity: creating ? 0.6 : 1,
-                cursor: creating ? "default" : "pointer",
-              }}
-            >
-              {creating ? "準備しています…" : "＋ 新しい壁打ち"}
-            </button>
-          )}
-
-          {choosingMode && (
-            <div className="sc-fade">
-              <div style={{ fontSize: 11, color: T.sub, lineHeight: 1.8, marginBottom: 8 }}>
-                どのスタイルで話しますか?
-                <br />
-                あとから変えられないので、ここで選んでください。
-              </div>
-
-              {MODE_CHOICES.map((m) => {
-                const c = m.id === "karakuchi" ? T.karakuchi : T.primary;
-                const soft = m.id === "karakuchi" ? T.karakuchiSoft : T.primarySoft;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => onNewSession(m.id)}
-                    disabled={creating}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "9px 11px",
-                      marginBottom: 7,
-                      borderRadius: 11,
-                      border: `1.5px solid ${c}`,
-                      background: soft,
-                      color: c,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      opacity: creating ? 0.6 : 1,
-                      cursor: creating ? "default" : "pointer",
-                    }}
-                  >
-                    {m.label}
-                    <span
-                      style={{
-                        display: "block",
-                        marginTop: 3,
-                        fontSize: 10,
-                        fontWeight: 400,
-                        color: T.sub,
-                      }}
-                    >
-                      {m.hint}
-                    </span>
-                  </button>
-                );
-              })}
-
-              <button
-                type="button"
-                onClick={() => setChoosingMode(false)}
-                disabled={creating}
-                style={{
-                  width: "100%",
-                  padding: "7px 0",
-                  borderRadius: 9,
-                  border: "none",
-                  background: "none",
-                  color: T.sub,
-                  fontSize: 11,
-                  fontWeight: 700,
-                  cursor: creating ? "default" : "pointer",
-                }}
-              >
-                {creating ? "準備しています…" : "やめる"}
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            // Wrapped, not passed straight through: onClick would hand the
+            // mouse event to a function whose first parameter is the tone.
+            onClick={() => onNewSession()}
+            disabled={creating}
+            style={{
+              width: "100%",
+              padding: "10px 0",
+              borderRadius: 11,
+              border: `1.5px solid ${T.primary}`,
+              background: T.primarySoft,
+              color: T.primary,
+              fontSize: 12.5,
+              fontWeight: 700,
+              opacity: creating ? 0.6 : 1,
+              cursor: creating ? "default" : "pointer",
+            }}
+          >
+            {creating ? "準備しています…" : "＋ 新しい壁打ち"}
+          </button>
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 12px 16px" }}>

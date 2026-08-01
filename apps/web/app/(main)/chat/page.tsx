@@ -17,19 +17,9 @@ import {
   type OpenedChat,
 } from "@/lib/firebase/sessions";
 import { SessionDrawer } from "@/components/SessionDrawer";
+import { ToneMenu } from "@/components/ToneMenu";
 import { postStream } from "@/lib/api-client";
 import { T } from "@/lib/theme";
-
-/**
- * The style is chosen once, when the 壁打ち is created, and then shown rather
- * than offered (MTG 7/20). Mid-session switching is gone: the transcript the
- * model is given would then mix two tones, and the cached history would no
- * longer match the instruction that produced it.
- */
-const MODE_LABELS: Record<ChatMode, string> = {
-  counselor: "じっくりモード",
-  karakuchi: "ストレートモード",
-};
 
 export default function ChatPage() {
   // useSearchParams needs a boundary for the shell to be prerendered.
@@ -287,10 +277,16 @@ function ChatScreen() {
     router.push(`/chat?s=${sessionId}`);
   };
 
-  // The one point where the style is decided. It is fixed for the life of the
-  // session from here on, so it arrives as an argument rather than being read
-  // off whatever conversation happened to be open.
-  const startNewSession = async (nextMode: ChatMode) => {
+  /**
+   * Start a fresh 壁打ち.
+   *
+   * The tone is fixed for the life of a session — the transcript sent back to
+   * the model would otherwise mix two tones, and the history would no longer
+   * match the instruction that produced it — so changing it means landing here.
+   * Called with no argument, the new conversation carries on in the tone the
+   * student is already talking in.
+   */
+  const startNewSession = async (nextMode: ChatMode = mode) => {
     if (!user || creatingSession) return;
     setCreatingSession(true);
     handOff(MIN_NEW_ON_LEAVE);
@@ -375,10 +371,16 @@ function ChatScreen() {
         />
       )}
 
-      {/* theme + the tone this session was started in */}
+      {/*
+        The menu bar. 「今日のテーマ」 used to sit here and is gone (MTG 7/30): it
+        was the app announcing what the conversation was about to a student who
+        was in the middle of having it. The theme still shapes the system
+        prompt — it just no longer takes the widest strip of the screen to say
+        something nobody was reading.
+      */}
       <div
         style={{
-          padding: "12px 16px 10px",
+          padding: "10px 14px",
           borderBottom: `1px solid ${T.line}`,
           background: T.paper,
         }}
@@ -404,33 +406,28 @@ function ChatScreen() {
               <rect y="10.4" width="16" height="1.6" rx="0.8" fill={T.ink} />
             </svg>
           </button>
+
           <div
+            className="sc-display"
             style={{
               flex: 1,
               minWidth: 0,
-              fontSize: 11,
-              color: T.sub,
+              fontSize: 12.5,
+              fontWeight: 700,
+              color: T.ink,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
             }}
           >
-            今日のテーマ: {session.theme || theme}
+            {session.title}
           </div>
-          {/* Read-only: which tone this 壁打ち was started in. */}
-          <div
-            style={{
-              flexShrink: 0,
-              fontSize: 10,
-              fontWeight: 700,
-              color: accent,
-              background: mode === "karakuchi" ? T.karakuchiSoft : T.primarySoft,
-              padding: "3px 9px",
-              borderRadius: 999,
-            }}
-          >
-            {MODE_LABELS[mode]}
-          </div>
+
+          <ToneMenu
+            mode={mode}
+            busy={creatingSession}
+            onSwitch={(next) => void startNewSession(next)}
+          />
         </div>
       </div>
 
@@ -443,20 +440,12 @@ function ChatScreen() {
           padding: "14px 14px 4px",
         }}
       >
-        <div style={{ textAlign: "center", marginBottom: 12 }}>
-          <span
-            style={{
-              fontSize: 10.5,
-              color: T.sub,
-              background: T.bg,
-              padding: "4px 10px",
-              borderRadius: 999,
-            }}
-          >
-            モードで変わるのは言い方だけ。深掘りの段数はどのモードでも同じです
-          </span>
-        </div>
-
+        {/*
+          「モードで変わるのは言い方だけ…」 used to sit here. It was an explanation
+          of an implementation decision, printed above every conversation
+          forever, and it is gone (MTG 7/30). If the two tones need a note to
+          tell them apart, the note is not the thing to fix.
+        */}
         {messages.map((m) => (
           <Bubble key={m.id} who={m.role} mode={m.mode ?? mode}>
             {m.text}
