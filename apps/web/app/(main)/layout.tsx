@@ -20,11 +20,30 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       {/* Above the pages: extraction is triggered by leaving a 壁打ち, so the
           thing that runs it must outlive the screen that asks for it. */}
       <ExtractionProvider>
-        <div className="flex min-h-0 flex-1 flex-col">
-          <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</main>
+        {/*
+          Pinned to exactly the visible height rather than allowed to grow.
+          Everything that has to stay on screen — the tab bar, and the composer
+          the chat screen puts above it — is a sibling of the one panel that
+          scrolls, so nothing can push them past the bottom edge. When the
+          keyboard opens, --sc-app-height shrinks and the whole shell shrinks
+          with it instead of sliding underneath.
+        */}
+        <div
+          className="flex flex-col"
+          style={{ height: "var(--sc-app-height, 100dvh)", minHeight: 0 }}
+        >
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</main>
 
           <nav
-            style={{ display: "flex", borderTop: `1px solid ${T.line}`, background: T.paper }}
+            style={{
+              flexShrink: 0,
+              display: "flex",
+              borderTop: `1px solid ${T.line}`,
+              background: T.paper,
+              // Keeps the labels clear of the home indicator rather than
+              // letting the OS draw its bar on top of them.
+              paddingBottom: "env(safe-area-inset-bottom, 0px)",
+            }}
           >
             {NAV.map((n) => {
               const active = pathname === n.href || pathname.startsWith(`${n.href}/`);

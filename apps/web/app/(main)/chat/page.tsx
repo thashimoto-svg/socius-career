@@ -3,21 +3,16 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { defaultTheme, titleFromFirstMessage } from "@socius/prompts";
+import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
 import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
-import {
-  appendMessage,
-  createSession,
-  openChat,
-  updateSessionMeta,
-  type OpenedChat,
-} from "@/lib/firebase/sessions";
-import { SessionDrawer } from "@/components/SessionDrawer";
+import { openChat, appendMessage, updateSessionMeta, type OpenedChat } from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
+import { startChat } from "@/lib/new-chat";
 import { postStream } from "@/lib/api-client";
 import { T } from "@/lib/theme";
 
@@ -60,7 +55,6 @@ function ChatScreen() {
   // to attach a message to, so it needs the whole screen and a way out.
   const [openError, setOpenError] = useState<string | null>(null);
   const [openAttempt, setOpenAttempt] = useState(0);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
 
   const profile = userDoc?.profile ?? null;
@@ -270,81 +264,69 @@ function ChatScreen() {
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [handOff]);
 
-  const openFromDrawer = (sessionId: string) => {
-    setDrawerOpen(false);
-    if (sessionId === session?.id) return;
-    handOff(MIN_NEW_ON_LEAVE);
-    router.push(`/chat?s=${sessionId}`);
-  };
-
   /**
-   * Start a fresh 壁打ち.
+   * Switch tone, which means starting a fresh 壁打ち.
    *
    * The tone is fixed for the life of a session — the transcript sent back to
    * the model would otherwise mix two tones, and the history would no longer
-   * match the instruction that produced it — so changing it means landing here.
-   * Called with no argument, the new conversation carries on in the tone the
-   * student is already talking in.
+   * match the instruction that produced it. ＋ in the header covers "another
+   * one of these"; this covers "one of the other kind".
    */
-  const startNewSession = async (nextMode: ChatMode = mode) => {
+  const switchTone = async (nextMode: ChatMode) => {
     if (!user || creatingSession) return;
     setCreatingSession(true);
     handOff(MIN_NEW_ON_LEAVE);
     try {
-      // Created before navigating so the drawer's own list has something to
-      // show next time it opens, rather than a thread that exists only as a
-      // pending URL.
-      const created = await createSession(user.uid, {
-        title: "新しい壁打ち",
-        theme,
-        mode: nextMode,
-      });
-      setDrawerOpen(false);
-      router.push(`/chat?s=${created.id}`);
+      const id = await startChat(user.uid, { mode: nextMode, profile });
+      router.push(`/chat?s=${id}`);
     } catch {
       setError("新しい壁打ちを始められませんでした。もう一度お試しください。");
-    } finally {
       setCreatingSession(false);
     }
   };
 
   if (!session) {
     return openError ? (
-      <div
-        role="alert"
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 14,
-          padding: 24,
-          textAlign: "center",
-        }}
-      >
-        <div style={{ fontSize: 12.5, color: T.karakuchi, lineHeight: 1.9 }}>
-          {openError}
-          <br />
-          通信状況を確認して、もう一度お試しください。
-        </div>
-        <button
-          type="button"
-          onClick={() => setOpenAttempt((n) => n + 1)}
+      // The header comes too, so a 壁打ち that will not load is not also a
+      // screen with no way off it.
+      <>
+        <AppHeader title="壁打ち" />
+        <div
+          role="alert"
           style={{
-            padding: "9px 24px",
-            borderRadius: 10,
-            border: `1.5px solid ${T.primary}`,
-            background: T.primarySoft,
-            color: T.primary,
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: "pointer",
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 14,
+            padding: 24,
+            textAlign: "center",
           }}
         >
-          再試行
-        </button>
-      </div>
+          <div style={{ fontSize: 12.5, color: T.karakuchi, lineHeight: 1.9 }}>
+            {openError}
+            <br />
+            通信状況を確認して、もう一度お試しください。
+          </div>
+          <button
+            type="button"
+            onClick={() => setOpenAttempt((n) => n + 1)}
+            style={{
+              padding: "9px 24px",
+              borderRadius: 10,
+              border: `1.5px solid ${T.primary}`,
+              background: T.primarySoft,
+              color: T.primary,
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            再試行
+          </button>
+        </div>
+      </>
     ) : (
       <AuthSplash />
     );
@@ -359,77 +341,26 @@ function ChatScreen() {
         minHeight: 0,
       }}
     >
-      {user && (
-        <SessionDrawer
-          open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          uid={user.uid}
-          currentSessionId={session.id}
-          onSelect={openFromDrawer}
-          onNewSession={startNewSession}
-          creating={creatingSession}
-        />
-      )}
-
       {/*
-        The menu bar. 「今日のテーマ」 used to sit here and is gone (MTG 7/30): it
-        was the app announcing what the conversation was about to a student who
-        was in the middle of having it. The theme still shapes the system
+        「今日のテーマ」 used to have this bar to itself and is gone (MTG 7/30):
+        it was the app announcing what the conversation was about to a student
+        who was in the middle of having it. The theme still shapes the system
         prompt — it just no longer takes the widest strip of the screen to say
         something nobody was reading.
       */}
-      <div
-        style={{
-          padding: "10px 14px",
-          borderBottom: `1px solid ${T.line}`,
-          background: T.paper,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            aria-label="壁打ちの一覧を開く"
-            aria-expanded={drawerOpen}
-            style={{
-              border: "none",
-              background: "none",
-              padding: 2,
-              display: "flex",
-              alignItems: "center",
-              cursor: "pointer",
-            }}
-          >
-            <svg width="16" height="12" viewBox="0 0 16 12" aria-hidden="true" focusable="false">
-              <rect width="16" height="1.6" rx="0.8" fill={T.ink} />
-              <rect y="5.2" width="16" height="1.6" rx="0.8" fill={T.ink} />
-              <rect y="10.4" width="16" height="1.6" rx="0.8" fill={T.ink} />
-            </svg>
-          </button>
-
-          <div
-            className="sc-display"
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontSize: 12.5,
-              fontWeight: 700,
-              color: T.ink,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {session.title}
-          </div>
-
+      <AppHeader
+        title={session.title}
+        currentSessionId={session.id}
+        newChatMode={mode}
+        onBeforeLeave={() => handOff(MIN_NEW_ON_LEAVE)}
+        extra={
           <ToneMenu
             mode={mode}
             busy={creatingSession}
-            onSwitch={(next) => void startNewSession(next)}
+            onSwitch={(next) => void switchTone(next)}
           />
-        </div>
-      </div>
+        }
+      />
 
       {/* transcript */}
       <div

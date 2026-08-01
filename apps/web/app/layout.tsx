@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Shippori_Mincho, Zen_Kaku_Gothic_New } from "next/font/google";
 import { AuthProvider } from "@/lib/firebase/auth-context";
+import { ViewportHeight } from "@/components/viewport-height";
 import "./globals.css";
 
 // Body / UI font.
@@ -31,6 +32,10 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: "#175E63",
+  // Lets the app paint into the notch and the home-indicator strip, which is
+  // also what makes env(safe-area-inset-*) report anything other than zero.
+  // The header and the tab bar pad themselves back out of those areas.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -44,8 +49,19 @@ export default function RootLayout({
       className={`${zenKaku.variable} ${shippori.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        {/* Mobile-first column; centered with a subtle frame on wider screens. */}
-        <div className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col bg-sc-paper shadow-[0_0_60px_rgba(34,48,47,0.06)]">
+        <ViewportHeight />
+        {/*
+          Mobile-first column; centered with a subtle frame on wider screens.
+
+          min-height rather than height, because the legal pages are longer
+          than a screen and have to be allowed to grow. The (main) shell pins
+          itself to exactly this height instead, so the app screens never
+          scroll the document — only the panel inside them that should.
+        */}
+        <div
+          className="mx-auto flex w-full max-w-[480px] flex-col bg-sc-paper shadow-[0_0_60px_rgba(34,48,47,0.06)]"
+          style={{ minHeight: "var(--sc-app-height, 100dvh)" }}
+        >
           <AuthProvider>{children}</AuthProvider>
         </div>
       </body>

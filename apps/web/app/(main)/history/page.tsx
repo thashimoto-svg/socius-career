@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { AppHeader } from "@/components/AppHeader";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { listSessions } from "@/lib/firebase/sessions";
 import { formatShortDate, type Session } from "@/lib/firebase/schema";
@@ -32,10 +33,10 @@ export default function HistoryPage() {
   }, [user]);
 
   return (
-    <div style={{ padding: "20px 16px" }}>
-      <h1 className="sc-display" style={{ fontSize: 18, fontWeight: 700, marginBottom: 14 }}>
-        壁打ちの記録
-      </h1>
+    <>
+      <AppHeader title="壁打ちの記録" />
+      {/* The shell no longer scrolls, so every screen owns the panel that does. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
 
       {error && (
         <div role="alert" style={{ fontSize: 12, color: T.karakuchi, lineHeight: 1.9 }}>
@@ -108,6 +109,7 @@ export default function HistoryPage() {
           </div>
         </Link>
       ))}
-    </div>
+      </div>
+    </>
   );
 }

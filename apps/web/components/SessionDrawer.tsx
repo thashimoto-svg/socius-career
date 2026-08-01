@@ -112,7 +112,9 @@ export function SessionDrawer({
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "14px 14px 10px",
+            // The drawer is fixed to the viewport, so it reaches into the notch
+            // that the header below it is padded out of.
+            padding: "calc(env(safe-area-inset-top, 0px) + 14px) 14px 10px",
             borderBottom: `1px solid ${T.line}`,
           }}
         >
@@ -161,7 +163,14 @@ export function SessionDrawer({
           </button>
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 12px 16px" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            padding: "4px 12px calc(env(safe-area-inset-bottom, 0px) + 16px)",
+          }}
+        >
           {error && (
             <div role="alert" style={{ fontSize: 11.5, color: T.karakuchi, lineHeight: 1.9 }}>
               記録を読み込めませんでした。

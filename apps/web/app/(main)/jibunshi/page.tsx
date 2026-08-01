@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AppHeader } from "@/components/AppHeader";
 import { useAuth } from "@/lib/firebase/auth-context";
 import {
   deleteEpisode,
@@ -68,11 +69,11 @@ export default function JibunshiPage() {
   };
 
   return (
-    <div style={{ padding: "20px 16px" }}>
-      <h1 className="sc-display" style={{ fontSize: 18, fontWeight: 700 }}>
-        自分史
-      </h1>
-      <p style={{ fontSize: 11.5, color: T.sub, margin: "4px 0 14px" }}>
+    <>
+      <AppHeader title="自分史" />
+      {/* The shell no longer scrolls, so every screen owns the panel that does. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
+      <p style={{ fontSize: 11.5, color: T.sub, margin: "0 0 14px" }}>
         ここにある言葉は、すべてあなた自身が話したことです。
       </p>
 
@@ -237,7 +238,8 @@ export default function JibunshiPage() {
           </div>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }
 

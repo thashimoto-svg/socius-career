@@ -2,6 +2,11 @@
 
 /* Design tokens — mirror of lib/theme.ts (T). Kept in sync by hand. */
 :root {
+  /* Overwritten per frame by components/viewport-height.tsx once the visual
+     viewport is readable. 100dvh is the first-paint value, and the answer
+     anywhere the API is missing. */
+  --sc-app-height: 100dvh;
+
   --sc-bg: #f4f6f5;
   --sc-paper: #ffffff;
   --sc-ink: #22302f;
@@ -36,6 +41,10 @@ body {
   background: var(--sc-bg);
   color: var(--sc-ink);
   font-family: var(--font-sc-sans), "Zen Kaku Gothic New", sans-serif;
+  /* Without this, dragging the transcript past its end rubber-bands the whole
+     document, and the composer and tabs slide off the bottom of the screen
+     while the finger is down. */
+  overscroll-behavior-y: none;
 }
 
 /* Shippori Mincho — used for display headings and student's own words. */
