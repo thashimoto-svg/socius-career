@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Chip } from "@/components/Chip";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { saveOnboarding } from "@/lib/firebase/users";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 type Step = {
   q: string;
@@ -123,11 +123,11 @@ export default function OnboardingPage() {
 
       {!done ? (
         <div className="sc-fade" key={step} style={{ flex: 1 }}>
-          <div className="sc-display" style={{ fontSize: 19, fontWeight: 700, marginBottom: 6 }}>
+          <div className="sc-display" style={{ fontSize: fs(19), fontWeight: 700, marginBottom: 6 }}>
             {steps[step].q}
           </div>
           {steps[step].sub && (
-            <div style={{ fontSize: 12, color: T.sub, marginBottom: 14 }}>{steps[step].sub}</div>
+            <div style={{ fontSize: fs(12), color: T.sub, marginBottom: 14 }}>{steps[step].sub}</div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
             {steps[step].render()}
@@ -144,10 +144,10 @@ export default function OnboardingPage() {
             textAlign: "center",
           }}
         >
-          <div className="sc-display" style={{ fontSize: 20, fontWeight: 700, marginBottom: 10 }}>
+          <div className="sc-display" style={{ fontSize: fs(20), fontWeight: 700, marginBottom: 10 }}>
             準備ができました
           </div>
-          <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.8 }}>
+          <div style={{ fontSize: fs(13), color: T.sub, lineHeight: 1.8 }}>
             {grade}・{club}の経験から、
             <br />
             最初の壁打ちを始めましょう。
@@ -168,7 +168,7 @@ export default function OnboardingPage() {
             borderRadius: 10,
             background: T.karakuchiSoft,
             color: T.karakuchi,
-            fontSize: 12,
+            fontSize: fs(12),
             lineHeight: 1.7,
           }}
         >
@@ -186,8 +186,8 @@ export default function OnboardingPage() {
           borderRadius: 12,
           border: "none",
           background: T.primary,
-          color: "#fff",
-          fontSize: 14,
+          color: T.onAccent,
+          fontSize: fs(14),
           fontWeight: 700,
           opacity: saving ? 0.6 : 1,
           cursor: saving ? "default" : "pointer",
@@ -204,7 +204,7 @@ export default function OnboardingPage() {
             background: "none",
             border: "none",
             color: T.sub,
-            fontSize: 12,
+            fontSize: fs(12),
             cursor: "pointer",
           }}
         >

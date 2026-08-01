@@ -1,4 +1,4 @@
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 type ChipProps = {
   label: string;
@@ -15,7 +15,7 @@ export function Chip({ label, active = false, onClick }: ChipProps) {
       style={{
         padding: "8px 14px",
         borderRadius: 999,
-        fontSize: 13,
+        fontSize: fs(13),
         fontWeight: 500,
         border: `1.5px solid ${active ? T.primary : T.line}`,
         background: active ? T.primarySoft : T.paper,

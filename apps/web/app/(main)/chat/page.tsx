@@ -14,7 +14,7 @@ import { openChat, appendMessage, updateSessionMeta, type OpenedChat } from "@/l
 import { ToneMenu } from "@/components/ToneMenu";
 import { startChat } from "@/lib/new-chat";
 import { postStream } from "@/lib/api-client";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 export default function ChatPage() {
   // useSearchParams needs a boundary for the shell to be prerendered.
@@ -304,7 +304,7 @@ function ChatScreen() {
             textAlign: "center",
           }}
         >
-          <div style={{ fontSize: 12.5, color: T.karakuchi, lineHeight: 1.9 }}>
+          <div style={{ fontSize: fs(12.5), color: T.karakuchi, lineHeight: 1.9 }}>
             {openError}
             <br />
             通信状況を確認して、もう一度お試しください。
@@ -318,7 +318,7 @@ function ChatScreen() {
               border: `1.5px solid ${T.primary}`,
               background: T.primarySoft,
               color: T.primary,
-              fontSize: 12,
+              fontSize: fs(12),
               fontWeight: 700,
               cursor: "pointer",
             }}
@@ -402,7 +402,7 @@ function ChatScreen() {
               borderRadius: 10,
               background: T.karakuchiSoft,
               color: T.karakuchi,
-              fontSize: 11.5,
+              fontSize: fs(11.5),
               lineHeight: 1.7,
             }}
           >
@@ -427,7 +427,7 @@ function ChatScreen() {
                   border: `1.5px solid ${T.karakuchi}`,
                   background: T.paper,
                   color: T.karakuchi,
-                  fontSize: 11.5,
+                  fontSize: fs(11.5),
                   fontWeight: 700,
                   opacity: thinking ? 0.5 : 1,
                   cursor: thinking ? "default" : "pointer",
@@ -468,7 +468,7 @@ function ChatScreen() {
               padding: "11px 14px",
               borderRadius: 12,
               border: `1.5px solid ${T.line}`,
-              fontSize: 12.5,
+              fontSize: fs(12.5),
               color: T.ink,
               background: T.bg,
               outline: "none",
@@ -485,8 +485,8 @@ function ChatScreen() {
               borderRadius: 12,
               border: "none",
               background: accent,
-              color: "#fff",
-              fontSize: 15,
+              color: T.onAccent,
+              fontSize: fs(15),
               fontWeight: 700,
               opacity: draft.trim() && !thinking ? 1 : 0.45,
               cursor: draft.trim() && !thinking ? "pointer" : "default",

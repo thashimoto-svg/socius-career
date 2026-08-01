@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ExtractionProvider } from "@/components/extraction-provider";
 import { RequireAuth } from "@/components/require-auth";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * 履歴 is not here (MTG 7/30).
@@ -70,7 +70,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                     flex: 1,
                     padding: "11px 0 13px",
                     textAlign: "center",
-                    fontSize: 11.5,
+                    fontSize: fs(11.5),
                     fontWeight: 700,
                     color: active ? T.primary : T.sub,
                     borderTop: `2.5px solid ${active ? T.primary : "transparent"}`,

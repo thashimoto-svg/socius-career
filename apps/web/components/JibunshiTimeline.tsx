@@ -1,7 +1,7 @@
 "use client";
 
 import type { PeriodBucket } from "@/lib/jibunshi-periods";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * The 自分史 as a shape before it is a list.
@@ -67,7 +67,7 @@ export function JibunshiTimeline({ buckets, onPick, loading }: JibunshiTimelineP
 
             <div
               style={{
-                fontSize: 11.5,
+                fontSize: fs(11.5),
                 fontWeight: 700,
                 color: filled ? T.ink : T.sub,
                 marginBottom: filled ? 6 : 3,
@@ -90,8 +90,8 @@ export function JibunshiTimeline({ buckets, onPick, loading }: JibunshiTimelineP
                       borderRadius: 10,
                       border: `1px solid ${T.gold}`,
                       background: T.goldSoft,
-                      color: "#8a6420",
-                      fontSize: 11.5,
+                      color: T.goldInk,
+                      fontSize: fs(11.5),
                       fontWeight: 700,
                       lineHeight: 1.5,
                       cursor: "pointer",
@@ -103,7 +103,7 @@ export function JibunshiTimeline({ buckets, onPick, loading }: JibunshiTimelineP
               </div>
             ) : (
               !loading && (
-                <div style={{ fontSize: 10.5, color: T.sub }}>
+                <div style={{ fontSize: fs(10.5), color: T.sub }}>
                   {bucket.period === "不明"
                     ? "時期が分かっていない出来事"
                     : "この時期の話はまだありません"}

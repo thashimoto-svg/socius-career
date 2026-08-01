@@ -64,6 +64,21 @@ service cloud.firestore {
         }
       }
 
+      // Appearance preferences. Kept out of the user document so that changing
+      // the font size does not touch identity or the onboarding answers, which
+      // are what the 壁打ち prompt is built from.
+      match /settings/{settingId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && incoming().keys().hasOnly(['fontSize', 'theme', 'language', 'updatedAt'])
+          && (!incoming().keys().hasAny(['fontSize'])
+              || incoming().fontSize in ['small', 'normal', 'large'])
+          && (!incoming().keys().hasAny(['theme'])
+              || incoming().theme in ['light', 'dark', 'system'])
+          && (!incoming().keys().hasAny(['language'])
+              || incoming().language in ['ja']);
+      }
+
       match /episodes/{episodeId} {
         allow read, delete: if isOwner(uid);
         allow create, update: if isOwner(uid)

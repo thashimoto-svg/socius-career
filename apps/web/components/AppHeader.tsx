@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { SessionDrawer } from "@/components/SessionDrawer";
 import { useAuth } from "@/lib/firebase/auth-context";
 import type { ChatMode } from "@/lib/firebase/schema";
 import { startChat } from "@/lib/new-chat";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * The bar every screen has.
@@ -128,7 +129,7 @@ export function AppHeader({
           style={{
             flex: 1,
             minWidth: 0,
-            fontSize: 12.5,
+            fontSize: fs(12.5),
             fontWeight: 700,
             color: T.ink,
             overflow: "hidden",
@@ -140,6 +141,27 @@ export function AppHeader({
         </div>
 
         {extra}
+
+        <Link
+          href="/settings"
+          aria-label="設定"
+          style={{
+            flexShrink: 0,
+            width: 28,
+            height: 28,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: T.sub,
+          }}
+        >
+          <svg width="17" height="17" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path
+              fill="currentColor"
+              d="M8.6 1.5h2.8l.35 2.1a6.5 6.5 0 0 1 1.5.87l2-.78 1.4 2.42-1.65 1.34a6.6 6.6 0 0 1 0 1.74l1.65 1.34-1.4 2.42-2-.78c-.46.36-.96.65-1.5.87l-.35 2.1H8.6l-.35-2.1a6.5 6.5 0 0 1-1.5-.87l-2 .78-1.4-2.42 1.65-1.34a6.6 6.6 0 0 1 0-1.74L3.35 6.11l1.4-2.42 2 .78c.46-.36.96-.65 1.5-.87L8.6 1.5Zm1.4 5.6a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8Z"
+            />
+          </svg>
+        </Link>
 
         <button
           type="button"
@@ -157,7 +179,7 @@ export function AppHeader({
             border: `1.5px solid ${T.primary}`,
             background: T.primarySoft,
             color: T.primary,
-            fontSize: 16,
+            fontSize: fs(16),
             fontWeight: 700,
             lineHeight: 1,
             opacity: creating ? 0.5 : 1,

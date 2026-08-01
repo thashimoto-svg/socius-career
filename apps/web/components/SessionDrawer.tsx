@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { listSessions } from "@/lib/firebase/sessions";
 import { formatShortDate, type Session } from "@/lib/firebase/schema";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 type SessionDrawerProps = {
   open: boolean;
@@ -83,7 +83,7 @@ export function SessionDrawer({
         style={{
           position: "fixed",
           inset: 0,
-          background: "rgba(34, 48, 47, 0.38)",
+          background: T.scrim,
           zIndex: 40,
         }}
       />
@@ -118,7 +118,7 @@ export function SessionDrawer({
             borderBottom: `1px solid ${T.line}`,
           }}
         >
-          <div className="sc-display" style={{ fontSize: 15, fontWeight: 700 }}>
+          <div className="sc-display" style={{ fontSize: fs(15), fontWeight: 700 }}>
             壁打ちの記録
           </div>
           <button
@@ -129,7 +129,7 @@ export function SessionDrawer({
               border: "none",
               background: "none",
               color: T.sub,
-              fontSize: 17,
+              fontSize: fs(17),
               lineHeight: 1,
               padding: 4,
               cursor: "pointer",
@@ -153,7 +153,7 @@ export function SessionDrawer({
               border: `1.5px solid ${T.primary}`,
               background: T.primarySoft,
               color: T.primary,
-              fontSize: 12.5,
+              fontSize: fs(12.5),
               fontWeight: 700,
               opacity: creating ? 0.6 : 1,
               cursor: creating ? "default" : "pointer",
@@ -172,17 +172,17 @@ export function SessionDrawer({
           }}
         >
           {error && (
-            <div role="alert" style={{ fontSize: 11.5, color: T.karakuchi, lineHeight: 1.9 }}>
+            <div role="alert" style={{ fontSize: fs(11.5), color: T.karakuchi, lineHeight: 1.9 }}>
               記録を読み込めませんでした。
             </div>
           )}
 
           {!error && sessions === null && (
-            <div style={{ fontSize: 11.5, color: T.sub }}>読み込んでいます…</div>
+            <div style={{ fontSize: fs(11.5), color: T.sub }}>読み込んでいます…</div>
           )}
 
           {!error && sessions?.length === 0 && (
-            <div style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.9 }}>
+            <div style={{ fontSize: fs(11.5), color: T.sub, lineHeight: 1.9 }}>
               まだ記録はありません。
             </div>
           )}
@@ -210,7 +210,7 @@ export function SessionDrawer({
               >
                 <div
                   style={{
-                    fontSize: 12.5,
+                    fontSize: fs(12.5),
                     fontWeight: 700,
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -219,7 +219,7 @@ export function SessionDrawer({
                 >
                   {s.title}
                 </div>
-                <div style={{ fontSize: 10.5, color: T.sub, marginTop: 4 }}>
+                <div style={{ fontSize: fs(10.5), color: T.sub, marginTop: 4 }}>
                   {formatShortDate(s.updatedAt)}・{s.turnCount}往復
                 </div>
               </button>

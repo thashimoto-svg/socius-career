@@ -1,4 +1,4 @@
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * Shown while Firebase restores the persisted session, and during the brief
@@ -14,7 +14,7 @@ export function AuthSplash() {
         alignItems: "center",
         justifyContent: "center",
         color: T.sub,
-        fontSize: 12,
+        fontSize: fs(12),
       }}
     >
       読み込んでいます…

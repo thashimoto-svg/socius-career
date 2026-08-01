@@ -11,7 +11,7 @@ import {
 import { useAuth } from "@/lib/firebase/auth-context";
 import { extractEpisode } from "@/lib/extraction";
 import type { Message, Session } from "@/lib/firebase/schema";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * Where automatic extraction actually runs.
@@ -127,11 +127,11 @@ export function ExtractionProvider({ children }: { children: React.ReactNode }) 
             borderRadius: 12,
             background: toast.tone === "ok" ? T.goldSoft : T.karakuchiSoft,
             border: `1.5px solid ${toast.tone === "ok" ? T.gold : T.karakuchi}`,
-            color: toast.tone === "ok" ? "#8a6420" : T.karakuchi,
-            fontSize: 11.5,
+            color: toast.tone === "ok" ? T.goldInk : T.karakuchi,
+            fontSize: fs(11.5),
             fontWeight: 700,
             lineHeight: 1.7,
-            boxShadow: "0 6px 20px rgba(34, 48, 47, 0.14)",
+            boxShadow: `0 6px 20px ${T.shadow}`,
           }}
         >
           {toast.text}

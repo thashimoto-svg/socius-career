@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { AuthSplash } from "@/components/auth-splash";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 export default function LoginPage() {
   const { user, loading, error, signInWithGoogle } = useAuth();
@@ -33,11 +33,11 @@ export default function LoginPage() {
       <div style={{ textAlign: "center", marginBottom: 36 }}>
         <div
           className="sc-display"
-          style={{ fontSize: 24, fontWeight: 700, marginBottom: 12 }}
+          style={{ fontSize: fs(24), fontWeight: 700, marginBottom: 12 }}
         >
           Socius Career
         </div>
-        <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.9 }}>
+        <div style={{ fontSize: fs(13), color: T.sub, lineHeight: 1.9 }}>
           就活生のための、対話型の自己分析。
           <br />
           <span style={{ color: T.gold, fontWeight: 700 }}>あなたの言葉で</span>
@@ -51,7 +51,7 @@ export default function LoginPage() {
           alignItems: "flex-start",
           gap: 9,
           marginBottom: 14,
-          fontSize: 12,
+          fontSize: fs(12),
           color: T.ink,
           lineHeight: 1.7,
           cursor: "pointer",
@@ -97,8 +97,8 @@ export default function LoginPage() {
           borderRadius: 12,
           border: "none",
           background: agreed ? T.primary : T.line,
-          color: agreed ? "#fff" : T.sub,
-          fontSize: 14,
+          color: agreed ? T.onAccent : T.sub,
+          fontSize: fs(14),
           fontWeight: 700,
           cursor: agreed ? "pointer" : "not-allowed",
         }}
@@ -115,7 +115,7 @@ export default function LoginPage() {
             borderRadius: 10,
             background: T.karakuchiSoft,
             color: T.karakuchi,
-            fontSize: 12,
+            fontSize: fs(12),
             lineHeight: 1.7,
           }}
         >
@@ -126,7 +126,7 @@ export default function LoginPage() {
       <div
         style={{
           marginTop: 20,
-          fontSize: 11,
+          fontSize: fs(11),
           color: T.sub,
           lineHeight: 1.8,
           textAlign: "center",

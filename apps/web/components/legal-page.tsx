@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * Shared shell for /privacy and /terms.
@@ -11,14 +11,14 @@ import { T } from "@/lib/theme";
 export function LegalPage({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div style={{ padding: "26px 22px", flex: 1, display: "flex", flexDirection: "column" }}>
-      <h1 className="sc-display" style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>
+      <h1 className="sc-display" style={{ fontSize: fs(20), fontWeight: 700, marginBottom: 16 }}>
         {title}
       </h1>
 
-      <div style={{ fontSize: 13, color: T.ink, lineHeight: 2 }}>{children}</div>
+      <div style={{ fontSize: fs(13), color: T.ink, lineHeight: 2 }}>{children}</div>
 
       <div style={{ marginTop: "auto", paddingTop: 28 }}>
-        <Link href="/login" style={{ fontSize: 12.5, color: T.primary, fontWeight: 700 }}>
+        <Link href="/login" style={{ fontSize: fs(12.5), color: T.primary, fontWeight: 700 }}>
           ← ログイン画面にもどる
         </Link>
       </div>
@@ -34,8 +34,8 @@ export function ComingSoon() {
         padding: "14px 16px",
         borderRadius: 12,
         background: T.goldSoft,
-        color: "#8a6420",
-        fontSize: 12.5,
+        color: T.goldInk,
+        fontSize: fs(12.5),
         lineHeight: 1.95,
       }}
     >

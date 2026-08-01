@@ -6,7 +6,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { listSessions } from "@/lib/firebase/sessions";
 import { formatShortDate, type Session } from "@/lib/firebase/schema";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 // Sessions are saved automatically; tapping one resumes it, so a conversation
 // is never consumed in a single sitting.
@@ -39,17 +39,17 @@ export default function HistoryPage() {
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
 
       {error && (
-        <div role="alert" style={{ fontSize: 12, color: T.karakuchi, lineHeight: 1.9 }}>
+        <div role="alert" style={{ fontSize: fs(12), color: T.karakuchi, lineHeight: 1.9 }}>
           記録を読み込めませんでした。ページを再読み込みしてください。
         </div>
       )}
 
       {!error && sessions === null && (
-        <div style={{ fontSize: 12, color: T.sub }}>読み込んでいます…</div>
+        <div style={{ fontSize: fs(12), color: T.sub }}>読み込んでいます…</div>
       )}
 
       {!error && sessions?.length === 0 && (
-        <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.9 }}>
+        <div style={{ fontSize: fs(12.5), color: T.sub, lineHeight: 1.9 }}>
           まだ記録はありません。
           <br />
           <Link href="/chat" style={{ color: T.primary, fontWeight: 700 }}>
@@ -74,16 +74,16 @@ export default function HistoryPage() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700 }}>{s.title}</div>
-            <div style={{ fontSize: 11, color: T.sub }}>{formatShortDate(s.updatedAt)}</div>
+            <div style={{ fontSize: fs(13.5), fontWeight: 700 }}>{s.title}</div>
+            <div style={{ fontSize: fs(11), color: T.sub }}>{formatShortDate(s.updatedAt)}</div>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 7, alignItems: "center" }}>
-            <span style={{ fontSize: 10.5, color: T.sub }}>{s.turnCount}往復</span>
+            <span style={{ fontSize: fs(10.5), color: T.sub }}>{s.turnCount}往復</span>
             {s.episodeCount > 0 ? (
               <span
                 style={{
-                  fontSize: 10.5,
-                  color: "#8a6420",
+                  fontSize: fs(10.5),
+                  color: T.goldInk,
                   background: T.goldSoft,
                   padding: "2px 8px",
                   borderRadius: 999,
@@ -95,7 +95,7 @@ export default function HistoryPage() {
             ) : (
               <span
                 style={{
-                  fontSize: 10.5,
+                  fontSize: fs(10.5),
                   color: T.primary,
                   background: T.primarySoft,
                   padding: "2px 8px",

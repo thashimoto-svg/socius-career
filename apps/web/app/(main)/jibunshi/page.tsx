@@ -12,7 +12,7 @@ import {
 } from "@/lib/firebase/episodes";
 import type { Episode, Star } from "@/lib/firebase/schema";
 import { bucketByPeriod } from "@/lib/jibunshi-periods";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /** What an edit can change. The AI's tag and emotion are not the student's to retype. */
 type EpisodePatch = {
@@ -94,14 +94,14 @@ export default function JibunshiPage() {
       <AppHeader title="自分史" />
       {/* The shell no longer scrolls, so every screen owns the panel that does. */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
-      <p style={{ fontSize: 11.5, color: T.sub, margin: "0 0 16px" }}>
+      <p style={{ fontSize: fs(11.5), color: T.sub, margin: "0 0 16px" }}>
         ここにある言葉は、すべてあなた自身が話したことです。
       </p>
 
       {error && (
         <div
           role="alert"
-          style={{ fontSize: 12, color: T.karakuchi, lineHeight: 1.9, marginBottom: 14 }}
+          style={{ fontSize: fs(12), color: T.karakuchi, lineHeight: 1.9, marginBottom: 14 }}
         >
           エピソードを読み込めませんでした。ページを再読み込みしてください。
         </div>
@@ -121,11 +121,11 @@ export default function JibunshiPage() {
       )}
 
       {!error && episodes === null && (
-        <div style={{ fontSize: 12, color: T.sub }}>読み込んでいます…</div>
+        <div style={{ fontSize: fs(12), color: T.sub }}>読み込んでいます…</div>
       )}
 
       {!error && episodes?.length === 0 && (
-        <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.9 }}>
+        <div style={{ fontSize: fs(12.5), color: T.sub, lineHeight: 1.9 }}>
           壁打ちで具体的な出来事を話すと、
           <br />
           あなたの言葉がこの年表に STAR で並びます。
@@ -135,7 +135,7 @@ export default function JibunshiPage() {
       {episodes && episodes.length > 0 && (
         <h2
           className="sc-display"
-          style={{ fontSize: 13, fontWeight: 700, margin: "0 0 10px", color: T.ink }}
+          style={{ fontSize: fs(13), fontWeight: 700, margin: "0 0 10px", color: T.ink }}
         >
           エピソード
         </h2>
@@ -188,7 +188,7 @@ export default function JibunshiPage() {
               >
                 <span
                   style={{
-                    fontSize: 10,
+                    fontSize: fs(10),
                     fontWeight: 700,
                     color: T.primary,
                     background: T.primarySoft,
@@ -202,9 +202,9 @@ export default function JibunshiPage() {
                     card the student can fix, and 編集する is right below. */}
                 <span
                   style={{
-                    fontSize: 10,
+                    fontSize: fs(10),
                     fontWeight: 700,
-                    color: e.period === "不明" ? T.sub : "#8a6420",
+                    color: e.period === "不明" ? T.sub : T.goldInk,
                     background: e.period === "不明" ? T.bg : T.goldSoft,
                     padding: "2px 8px",
                     borderRadius: 999,
@@ -213,10 +213,10 @@ export default function JibunshiPage() {
                   {e.period === "不明" ? "時期未設定" : e.period}
                 </span>
                 {e.emotion && (
-                  <span style={{ fontSize: 10, color: T.sub }}>感情: {e.emotion}</span>
+                  <span style={{ fontSize: fs(10), color: T.sub }}>感情: {e.emotion}</span>
                 )}
               </div>
-              <div className="sc-display" style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>
+              <div className="sc-display" style={{ fontSize: fs(14.5), fontWeight: 700, color: T.ink }}>
                 {e.title}
               </div>
             </button>
@@ -240,7 +240,7 @@ export default function JibunshiPage() {
                         borderRadius: 6,
                         background: T.bg,
                         color: T.primary,
-                        fontSize: 10.5,
+                        fontSize: fs(10.5),
                         fontWeight: 700,
                         display: "flex",
                         alignItems: "center",
@@ -249,7 +249,7 @@ export default function JibunshiPage() {
                     >
                       {key}・{label}
                     </div>
-                    <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>{e.star[key]}</div>
+                    <div style={{ fontSize: fs(12.5), lineHeight: 1.7 }}>{e.star[key]}</div>
                   </div>
                 ))}
 
@@ -261,10 +261,10 @@ export default function JibunshiPage() {
                     margin: "10px 0",
                   }}
                 >
-                  <div style={{ fontSize: 10, fontWeight: 700, color: "#8a6420", marginBottom: 3 }}>
+                  <div style={{ fontSize: fs(10), fontWeight: 700, color: T.goldInk, marginBottom: 3 }}>
                     学び ── 自分の言葉で
                   </div>
-                  <div className="sc-display" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+                  <div className="sc-display" style={{ fontSize: fs(12.5), lineHeight: 1.7 }}>
                     {e.learn}
                   </div>
                 </div>
@@ -282,7 +282,7 @@ export default function JibunshiPage() {
                       borderRadius: 9,
                       border: `1.5px solid ${T.line}`,
                       background: T.paper,
-                      fontSize: 11.5,
+                      fontSize: fs(11.5),
                       fontWeight: 700,
                       color: T.ink,
                       cursor: "pointer",
@@ -299,7 +299,7 @@ export default function JibunshiPage() {
                       borderRadius: 9,
                       border: `1.5px solid ${T.line}`,
                       background: T.paper,
-                      fontSize: 11.5,
+                      fontSize: fs(11.5),
                       fontWeight: 700,
                       color: T.karakuchi,
                       cursor: "pointer",
@@ -325,7 +325,7 @@ const fieldStyle: React.CSSProperties = {
   border: `1.5px solid ${T.line}`,
   background: T.bg,
   color: T.ink,
-  fontSize: 12.5,
+  fontSize: fs(12.5),
   lineHeight: 1.7,
   fontFamily: "inherit",
   resize: "vertical",
@@ -352,7 +352,7 @@ function EpisodeEditor({
 
   return (
     <div className="sc-fade" style={{ padding: "0 15px 13px" }}>
-      <label style={{ display: "block", fontSize: 10, color: T.sub, marginBottom: 4 }}>
+      <label style={{ display: "block", fontSize: fs(10), color: T.sub, marginBottom: 4 }}>
         タイトル
       </label>
       <input value={title} onChange={(ev) => setTitle(ev.target.value)} style={fieldStyle} />
@@ -364,7 +364,7 @@ function EpisodeEditor({
       */}
       <label
         htmlFor={`period-${episode.id}`}
-        style={{ display: "block", fontSize: 10, color: T.sub, margin: "10px 0 4px" }}
+        style={{ display: "block", fontSize: fs(10), color: T.sub, margin: "10px 0 4px" }}
       >
         時期
       </label>
@@ -383,7 +383,7 @@ function EpisodeEditor({
 
       {STAR_LABELS.map(({ key, label }) => (
         <div key={key} style={{ marginTop: 10 }}>
-          <label style={{ display: "block", fontSize: 10, color: T.sub, marginBottom: 4 }}>
+          <label style={{ display: "block", fontSize: fs(10), color: T.sub, marginBottom: 4 }}>
             {key}・{label}
           </label>
           <textarea
@@ -396,7 +396,7 @@ function EpisodeEditor({
       ))}
 
       <div style={{ marginTop: 10 }}>
-        <label style={{ display: "block", fontSize: 10, color: T.sub, marginBottom: 4 }}>
+        <label style={{ display: "block", fontSize: fs(10), color: T.sub, marginBottom: 4 }}>
           学び ── 自分の言葉で
         </label>
         <textarea
@@ -417,8 +417,8 @@ function EpisodeEditor({
             borderRadius: 9,
             border: "none",
             background: T.primary,
-            color: "#fff",
-            fontSize: 11.5,
+            color: T.onAccent,
+            fontSize: fs(11.5),
             fontWeight: 700,
             cursor: "pointer",
           }}
@@ -434,7 +434,7 @@ function EpisodeEditor({
             borderRadius: 9,
             border: `1.5px solid ${T.line}`,
             background: T.paper,
-            fontSize: 11.5,
+            fontSize: fs(11.5),
             fontWeight: 700,
             color: T.sub,
             cursor: "pointer",

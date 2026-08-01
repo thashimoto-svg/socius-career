@@ -10,7 +10,7 @@ import { listSessions } from "@/lib/firebase/sessions";
 import { formatShortDate, type Episode, type Session } from "@/lib/firebase/schema";
 import { PERIOD_SHORT, periodsFilled, TIMELINE_PERIODS } from "@/lib/jibunshi-periods";
 import { startChat } from "@/lib/new-chat";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * What the 壁打ち has added up to.
@@ -78,7 +78,7 @@ export default function HomePage() {
       <AppHeader title="ホーム" newChatMode={summary?.latest?.mode ?? "counselor"} />
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 16px" }}>
-        <p style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.9, margin: "0 0 14px" }}>
+        <p style={{ fontSize: fs(11.5), color: T.sub, lineHeight: 1.9, margin: "0 0 14px" }}>
           {userDoc?.displayName ? `${userDoc.displayName}さんの` : ""}
           自分史は、話した分だけ埋まります。
         </p>
@@ -88,7 +88,7 @@ export default function HomePage() {
             role="alert"
             style={{
               marginBottom: 14,
-              fontSize: 11.5,
+              fontSize: fs(11.5),
               color: T.karakuchi,
               lineHeight: 1.9,
             }}
@@ -105,7 +105,7 @@ export default function HomePage() {
             href="/jibunshi"
             accent={T.gold}
             soft={T.goldSoft}
-            valueColor="#8a6420"
+            valueColor={T.goldInk}
           />
           <StatCard
             label="直近の壁打ち"
@@ -134,8 +134,8 @@ export default function HomePage() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.sub }}>埋まった期間</div>
-            <div style={{ fontSize: 11, color: T.sub }}>
+            <div style={{ fontSize: fs(11), fontWeight: 700, color: T.sub }}>埋まった期間</div>
+            <div style={{ fontSize: fs(11), color: T.sub }}>
               {summary ? `${filled.length} / ${total}` : "—"}
             </div>
           </div>
@@ -156,9 +156,9 @@ export default function HomePage() {
                   <div
                     style={{
                       marginTop: 5,
-                      fontSize: 9.5,
+                      fontSize: fs(9.5),
                       fontWeight: done ? 700 : 400,
-                      color: done ? "#8a6420" : T.sub,
+                      color: done ? T.goldInk : T.sub,
                       whiteSpace: "nowrap",
                     }}
                   >
@@ -180,8 +180,8 @@ export default function HomePage() {
             borderRadius: 13,
             border: "none",
             background: T.primary,
-            color: "#fff",
-            fontSize: 13.5,
+            color: T.onAccent,
+            fontSize: fs(13.5),
             fontWeight: 700,
             opacity: starting ? 0.6 : 1,
             cursor: starting ? "default" : "pointer",
@@ -198,7 +198,7 @@ export default function HomePage() {
               marginTop: 8,
               padding: "10px 0",
               textAlign: "center",
-              fontSize: 11.5,
+              fontSize: fs(11.5),
               fontWeight: 700,
               color: T.primary,
             }}
@@ -236,21 +236,21 @@ function StatCard({
         flex: 1,
         display: "block",
         background: soft,
-        border: `1px solid ${accent}33`,
+        border: `1px solid ${T.line}`,
         borderRadius: 14,
         padding: "12px 14px",
         color: T.ink,
       }}
     >
-      <div style={{ fontSize: 11, fontWeight: 700, color: T.sub }}>{label}</div>
+      <div style={{ fontSize: fs(11), fontWeight: 700, color: T.sub }}>{label}</div>
       <div style={{ marginTop: 6, display: "flex", alignItems: "baseline", gap: 3 }}>
         <span
           className="sc-display"
-          style={{ fontSize: 22, fontWeight: 700, color: valueColor, lineHeight: 1.1 }}
+          style={{ fontSize: fs(22), fontWeight: 700, color: valueColor, lineHeight: 1.1 }}
         >
           {value}
         </span>
-        {unit && <span style={{ fontSize: 11, color: T.sub }}>{unit}</span>}
+        {unit && <span style={{ fontSize: fs(11), color: T.sub }}>{unit}</span>}
       </div>
     </Link>
   );

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Shippori_Mincho, Zen_Kaku_Gothic_New } from "next/font/google";
 import { AuthProvider } from "@/lib/firebase/auth-context";
+import { SettingsProvider } from "@/components/settings-provider";
 import { ViewportHeight } from "@/components/viewport-height";
 import "./globals.css";
 
@@ -62,7 +63,11 @@ export default function RootLayout({
           className="mx-auto flex w-full max-w-[480px] flex-col bg-sc-paper shadow-[0_0_60px_rgba(34,48,47,0.06)]"
           style={{ minHeight: "var(--sc-app-height, 100dvh)" }}
         >
-          <AuthProvider>{children}</AuthProvider>
+          {/* Inside AuthProvider — settings are per student, so there is
+              nobody to read them for until there is a student. */}
+          <AuthProvider>
+            <SettingsProvider>{children}</SettingsProvider>
+          </AuthProvider>
         </div>
       </body>
     </html>

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ChatMode } from "@/lib/firebase/schema";
-import { T } from "@/lib/theme";
+import { fs, T } from "@/lib/theme";
 
 /**
  * The style switch, in the header where the student can find it.
@@ -84,7 +84,7 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
           border: `1.5px solid ${accentOf(mode)}`,
           background: softOf(mode),
           color: accentOf(mode),
-          fontSize: 10.5,
+          fontSize: fs(10.5),
           fontWeight: 700,
           opacity: busy ? 0.5 : 1,
           cursor: busy ? "default" : "pointer",
@@ -118,7 +118,7 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
               borderRadius: 12,
               border: `1px solid ${T.line}`,
               background: T.paper,
-              boxShadow: "0 10px 28px rgba(34, 48, 47, 0.16)",
+              boxShadow: `0 10px 28px ${T.shadow}`,
             }}
           >
             {TONES.map((tone) => {
@@ -139,7 +139,7 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
                     border: "none",
                     background: current ? softOf(tone) : "transparent",
                     color: current ? accentOf(tone) : T.ink,
-                    fontSize: 12,
+                    fontSize: fs(12),
                     fontWeight: 700,
                     cursor: "pointer",
                   }}
@@ -150,7 +150,7 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
                     style={{
                       display: "block",
                       marginTop: 3,
-                      fontSize: 10,
+                      fontSize: fs(10),
                       fontWeight: 400,
                       color: T.sub,
                     }}
@@ -173,7 +173,7 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
             style={{
               position: "fixed",
               inset: 0,
-              background: "rgba(34, 48, 47, 0.38)",
+              background: T.scrim,
               zIndex: 50,
             }}
           />
@@ -193,13 +193,13 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
               borderRadius: 16,
               background: T.paper,
               border: `1px solid ${T.line}`,
-              boxShadow: "0 16px 40px rgba(34, 48, 47, 0.22)",
+              boxShadow: `0 16px 40px ${T.shadow}`,
             }}
           >
-            <div className="sc-display" style={{ fontSize: 14, fontWeight: 700 }}>
+            <div className="sc-display" style={{ fontSize: fs(14), fontWeight: 700 }}>
               {TONE_LABELS[pending]}に切り替えますか?
             </div>
-            <p style={{ fontSize: 11.5, color: T.sub, lineHeight: 1.9, margin: "8px 0 14px" }}>
+            <p style={{ fontSize: fs(11.5), color: T.sub, lineHeight: 1.9, margin: "8px 0 14px" }}>
               新しいチャットを開始します
               <br />
               (現在の会話は履歴に保存されます)
@@ -219,8 +219,8 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
                 borderRadius: 11,
                 border: "none",
                 background: accentOf(pending),
-                color: "#fff",
-                fontSize: 12.5,
+                color: T.onAccent,
+                fontSize: fs(12.5),
                 fontWeight: 700,
                 opacity: busy ? 0.6 : 1,
                 cursor: busy ? "default" : "pointer",
@@ -239,7 +239,7 @@ export function ToneMenu({ mode, busy, onSwitch }: ToneMenuProps) {
                 border: "none",
                 background: "none",
                 color: T.sub,
-                fontSize: 11.5,
+                fontSize: fs(11.5),
                 fontWeight: 700,
                 cursor: "pointer",
               }}
