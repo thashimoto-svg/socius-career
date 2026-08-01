@@ -90,9 +90,9 @@ export default function JibunshiPage() {
         <div style={{ fontSize: 12.5, color: T.sub, lineHeight: 1.9 }}>
           まだエピソードはありません。
           <br />
-          壁打ちを終えるときに「エピソードとして残す」を押すと、
+          壁打ちで具体的な出来事を話すと、
           <br />
-          話した言葉がここに STAR で並びます。
+          あなたの言葉がここに STAR で並びます。
         </div>
       )}
 

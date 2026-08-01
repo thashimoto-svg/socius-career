@@ -43,6 +43,7 @@ export async function createSession(
     status: "open",
     turnCount: 0,
     episodeCount: 0,
+    extractedCount: 0,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -55,6 +56,7 @@ export async function createSession(
     status: "open",
     turnCount: 0,
     episodeCount: 0,
+    extractedCount: 0,
     createdAt: null,
     updatedAt: null,
   };
@@ -189,14 +191,26 @@ export async function updateSessionMeta(
   });
 }
 
-export async function closeSession(
+/**
+ * Record that extraction has read this 壁打ち up to `extractedCount` lines.
+ *
+ * Written after the episode is saved rather than before, so a run that fails
+ * halfway leaves the session looking un-extracted and gets tried again. The
+ * duplicate check on the way in is what makes that safe to repeat.
+ *
+ * `episodeCount` only moves when a new card was actually created; updating an
+ * existing one is not a second episode.
+ */
+export async function markExtracted(
   uid: string,
   sessionId: string,
-  opts: { addedEpisode: boolean },
+  opts: { extractedCount: number; addedEpisode: boolean },
 ): Promise<void> {
   await updateDoc(sessionRef(uid, sessionId), {
-    status: "closed",
-    updatedAt: serverTimestamp(),
+    extractedCount: opts.extractedCount,
+    // Deliberately not touching updatedAt: extraction is not something the
+    // student did, and letting it reorder the history list would make threads
+    // jump around on their own.
     ...(opts.addedEpisode ? { episodeCount: increment(1) } : {}),
   });
 }
@@ -204,6 +218,10 @@ export async function closeSession(
 /**
  * Reopen a closed 壁打ち so the student can keep going. The transcript is kept —
  * nothing is discarded by finishing a session.
+ *
+ * Nothing closes a session any more: 「セッションを終える」 was the manual
+ * extraction button, and extraction now runs on its own. This stays for the
+ * sessions that were closed while that button existed.
  */
 export async function reopenSession(
   uid: string,

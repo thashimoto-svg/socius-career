@@ -42,7 +42,8 @@ service cloud.firestore {
         allow create, update: if isOwner(uid)
           && incoming().keys().hasOnly([
                'title', 'theme', 'mode', 'status',
-               'turnCount', 'episodeCount', 'createdAt', 'updatedAt'
+               'turnCount', 'episodeCount', 'extractedCount',
+               'createdAt', 'updatedAt'
              ])
           && incoming().title is string && incoming().title.size() <= 200
           && incoming().mode in ['counselor', 'karakuchi']

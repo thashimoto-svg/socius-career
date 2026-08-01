@@ -44,17 +44,44 @@ export const EXTRACTION_SYSTEM_PROMPT = `あなたは対話ログから、就活
 /** One line of the transcript as the extractor sees it. */
 export type TranscriptLine = { role: "user" | "ai"; text: string };
 
-export function buildExtractionPrompt(transcript: TranscriptLine[]): string {
+export function buildExtractionPrompt(
+  transcript: TranscriptLine[],
+  /**
+   * Cards already saved from this same 壁打ち.
+   *
+   * Extraction runs repeatedly on a growing conversation now, so most runs are
+   * looking at a transcript they have mostly seen before. Naming what is
+   * already on file is what turns "extract an episode" into "extract the one
+   * that is not there yet" — without it, a long 壁打ち produces the same card
+   * over and over.
+   */
+  alreadySaved: string[] = [],
+): string {
   const log = transcript
     .map((m) => `${m.role === "user" ? "学生" : "AI"}: ${m.text}`)
     .join("\n");
+
+  const saved = alreadySaved.length
+    ? `
+
+【この壁打ちから既に保存済みのエピソード】
+${alreadySaved.map((t) => `- ${t}`).join("\n")}
+
+これらと同じ出来事は、もう保存しないでください。
+まだ残していない出来事が語られていれば、それを1件だけ抽出してください。
+既存のエピソードに、後から語られた事実が加わっている場合に限り、
+同じタイトルのまま、より詳しい内容で抽出し直してかまいません。
+新しく残せるものが無ければ、${SKIP_TOOL_NAME} を呼んでください。`
+    : `
+
+まだ具体的な出来事が語られていない場合は、無理に作らず ${SKIP_TOOL_NAME} を呼んでください。`;
 
   return `次の壁打ちのログから、エピソードを1件だけ抽出してください。
 複数の話題がある場合は、学生が最も具体的に語った1件を選びます。
 
 ----- ログ ここから -----
 ${log}
------ ログ ここまで -----`;
+----- ログ ここまで -----${saved}`;
 }
 
 /**
@@ -66,6 +93,27 @@ ${log}
  * gets a schema-validated object out of every model that can call tools at all.
  */
 export const EPISODE_TOOL_NAME = "save_episode";
+
+/**
+ * The other thing the model is allowed to do: nothing.
+ *
+ * Automatic extraction runs on conversations that may have nothing new in them
+ * yet, so "there is no episode here" has to be a first-class answer rather than
+ * a card invented to satisfy a forced tool call.
+ */
+export const SKIP_TOOL_NAME = "no_new_episode";
+
+export const SKIP_TOOL_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    reason: {
+      type: "string",
+      description: "残せるエピソードが無いと判断した理由を一文で。",
+    },
+  },
+  required: ["reason"],
+  additionalProperties: false,
+} as const;
 
 export const EPISODE_TOOL_INPUT_SCHEMA = {
   type: "object",

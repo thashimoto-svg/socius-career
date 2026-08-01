@@ -5,24 +5,19 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { defaultTheme, titleFromFirstMessage } from "@socius/prompts";
 import { Bubble } from "@/components/Bubble";
 import { AuthSplash } from "@/components/auth-splash";
+import { useExtraction } from "@/components/extraction-provider";
 import { useAuth } from "@/lib/firebase/auth-context";
-import { createEpisode } from "@/lib/firebase/episodes";
-import {
-  type ChatMode,
-  type Message,
-  type Session,
-  type Star,
-} from "@/lib/firebase/schema";
+import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
+import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
 import {
   appendMessage,
-  closeSession,
   createSession,
   openChat,
   updateSessionMeta,
   type OpenedChat,
 } from "@/lib/firebase/sessions";
 import { SessionDrawer } from "@/components/SessionDrawer";
-import { postJson, postStream } from "@/lib/api-client";
+import { postStream } from "@/lib/api-client";
 import { T } from "@/lib/theme";
 
 /**
@@ -34,16 +29,6 @@ import { T } from "@/lib/theme";
 const MODE_LABELS: Record<ChatMode, string> = {
   counselor: "じっくりモード",
   karakuchi: "ストレートモード",
-};
-
-type ExtractReply = {
-  episode: {
-    title: string;
-    tag: string;
-    emotion: string;
-    star: Star;
-    learn: string;
-  };
 };
 
 export default function ChatPage() {
@@ -59,6 +44,7 @@ function ChatScreen() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, userDoc } = useAuth();
+  const startExtraction = useExtraction();
 
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -66,7 +52,6 @@ function ChatScreen() {
   const [thinking, setThinking] = useState(false);
   // The reply as it streams in, before it exists as a saved message.
   const [streaming, setStreaming] = useState("");
-  const [ending, setEnding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The turn that failed, kept so it can be asked for again.
   //
@@ -248,9 +233,57 @@ function ChatScreen() {
     await requestReply(session.id, next, session.mode, session.theme);
   };
 
+  // What automatic extraction reads, kept in a ref so the visibility listener
+  // below can stay registered once instead of being torn down and rebuilt on
+  // every message.
+  const current = useRef<{ session: Session | null; messages: Message[] }>({
+    session: null,
+    messages: [],
+  });
+  useEffect(() => {
+    current.current = { session, messages };
+  }, [session, messages]);
+
+  /**
+   * Hand the 壁打ち being left over to the background extractor.
+   *
+   * Fire-and-forget by design: the student is on their way somewhere, and the
+   * thing that does the work lives in the layout, so it outlives this screen.
+   */
+  const handOff = useCallback(
+    (minNew: number) => {
+      const { session: leaving, messages: transcript } = current.current;
+      if (!leaving || !hasNewMaterial(leaving, transcript, minNew)) return;
+
+      startExtraction({
+        session: leaving,
+        messages: transcript,
+        onRead: (extractedCount) =>
+          // Only if this screen is still showing the same 壁打ち — by the time
+          // this lands, the student is usually looking at a different one.
+          setSession((prev) =>
+            prev && prev.id === leaving.id ? { ...prev, extractedCount } : prev,
+          ),
+      });
+    },
+    [startExtraction],
+  );
+
+  // 「最後の抽出から6メッセージ以上増えた状態でアプリ復帰時」. Backgrounding the app
+  // is the other way a 壁打ち ends — students close the tab mid-thought far more
+  // often than they tidily switch threads.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") handOff(MIN_NEW_ON_RESUME);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [handOff]);
+
   const openFromDrawer = (sessionId: string) => {
     setDrawerOpen(false);
     if (sessionId === session?.id) return;
+    handOff(MIN_NEW_ON_LEAVE);
     router.push(`/chat?s=${sessionId}`);
   };
 
@@ -260,6 +293,7 @@ function ChatScreen() {
   const startNewSession = async (nextMode: ChatMode) => {
     if (!user || creatingSession) return;
     setCreatingSession(true);
+    handOff(MIN_NEW_ON_LEAVE);
     try {
       // Created before navigating so the drawer's own list has something to
       // show next time it opens, rather than a thread that exists only as a
@@ -275,23 +309,6 @@ function ChatScreen() {
       setError("新しい壁打ちを始められませんでした。もう一度お試しください。");
     } finally {
       setCreatingSession(false);
-    }
-  };
-
-  const endSession = async () => {
-    if (!user || !session || ending) return;
-    setEnding(true);
-    setError(null);
-    try {
-      const { episode } = await postJson<ExtractReply>("/api/extract", user, {
-        messages: messages.map((m) => ({ role: m.role, text: m.text })),
-      });
-      await createEpisode(user.uid, { ...episode, sessionId: session.id });
-      await closeSession(user.uid, session.id, { addedEpisode: true });
-      router.push("/jibunshi");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "エピソードを残せませんでした。");
-      setEnding(false);
     }
   };
 
@@ -558,29 +575,6 @@ function ChatScreen() {
             ↑
           </button>
         </form>
-
-        <button
-          type="button"
-          onClick={() => void endSession()}
-          disabled={ending || thinking || messages.length < 2}
-          style={{
-            width: "100%",
-            marginTop: 8,
-            padding: "9px 0",
-            borderRadius: 10,
-            border: `1.5px solid ${T.gold}`,
-            background: T.goldSoft,
-            color: "#8a6420",
-            fontSize: 12,
-            fontWeight: 700,
-            opacity: ending || thinking || messages.length < 2 ? 0.5 : 1,
-            cursor: ending ? "default" : "pointer",
-          }}
-        >
-          {ending
-            ? "エピソードにまとめています…"
-            : "セッションを終えて、エピソードとして残す"}
-        </button>
       </div>
     </div>
   );

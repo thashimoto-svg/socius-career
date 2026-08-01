@@ -5,6 +5,8 @@ import {
   EPISODE_TOOL_INPUT_SCHEMA,
   EPISODE_TOOL_NAME,
   EXTRACTION_SYSTEM_PROMPT,
+  SKIP_TOOL_INPUT_SCHEMA,
+  SKIP_TOOL_NAME,
   type ExtractedEpisode,
 } from "@socius/prompts";
 import { isRateLimited, verifyRequestUid } from "@/lib/server/auth";
@@ -44,6 +46,29 @@ const EPISODE_TOOL: Tool = {
     "壁打ちのログから抽出した、学生本人の言葉によるエピソードを1件保存する。",
   input_schema: EPISODE_TOOL_INPUT_SCHEMA as unknown as Tool.InputSchema,
 };
+
+/**
+ * The escape hatch, and the reason `tool_choice` is `any` rather than a forced
+ * `save_episode`. Extraction now runs by itself on conversations that may have
+ * nothing new in them, so the model needs a way to say so — otherwise a forced
+ * call would make it invent a card out of whatever was nearest.
+ */
+const SKIP_TOOL: Tool = {
+  name: SKIP_TOOL_NAME,
+  description:
+    "まだ保存できる新しいエピソードが無いときに呼ぶ。無理にエピソードを作らないこと。",
+  input_schema: SKIP_TOOL_INPUT_SCHEMA as unknown as Tool.InputSchema,
+};
+
+/** Titles the client says are already on file for this 壁打ち. */
+function parseSavedTitles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((t): t is string => typeof t === "string")
+    .map((t) => t.trim().slice(0, 200))
+    .filter((t) => t.length > 0)
+    .slice(0, 30);
+}
 
 function str(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -89,23 +114,26 @@ export async function POST(request: Request) {
   }
 
   let transcript;
+  let savedTitles: string[];
   try {
-    const body = (await request.json()) as { messages?: unknown };
+    const body = (await request.json()) as {
+      messages?: unknown;
+      savedTitles?: unknown;
+    };
     transcript = parseMessages(body.messages);
+    savedTitles = parseSavedTitles(body.savedTitles);
   } catch {
     return Response.json({ error: "invalid json" }, { status: 400 });
   }
 
+  // Nothing the student said means nothing to extract. This runs in the
+  // background now, so it is an ordinary "not yet", not a failure.
   if (transcript.filter((m) => m.role === "user").length === 0) {
-    return Response.json(
-      {
-        error: "まだあなたの言葉が残っていません。少し話してから試してください。",
-      },
-      { status: 400 },
-    );
+    return Response.json({ episode: null, reason: "no-student-turns" });
   }
 
   let input: unknown;
+  let skipped = false;
 
   try {
     const message = await callAnthropic("api/extract", () =>
@@ -117,12 +145,17 @@ export async function POST(request: Request) {
         // turn: the job is to pick the one episode the student told best, so the
         // window is the full transcript parseMessages allows.
         messages: [
-          { role: "user", content: buildExtractionPrompt(historyWindow(transcript, 20)) },
+          {
+            role: "user",
+            content: buildExtractionPrompt(historyWindow(transcript, 20), savedTitles),
+          },
         ],
-        tools: [EPISODE_TOOL],
-        // Forced, so there is no path where the model answers in prose and the
-        // route has to guess whether the prose was meant to be the card.
-        tool_choice: { type: "tool", name: EPISODE_TOOL_NAME },
+        tools: [EPISODE_TOOL, SKIP_TOOL],
+        // A tool call is mandatory, so there is no path where the model answers
+        // in prose and the route has to guess whether the prose was meant to be
+        // the card. Which tool is the model's to decide — that is the whole
+        // point of SKIP_TOOL.
+        tool_choice: { type: "any" },
       }),
     );
 
@@ -130,10 +163,7 @@ export async function POST(request: Request) {
     // checked before anything reads `content`.
     if (message.stop_reason === "refusal") {
       console.error("[api/extract] refused", message.stop_details);
-      return Response.json(
-        { error: "この会話からはエピソードをまとめられませんでした。" },
-        { status: 422 },
-      );
+      return Response.json({ episode: null, reason: "refused" });
     }
 
     // Truncation is not the same failure as a conversation with nothing in it,
@@ -147,6 +177,7 @@ export async function POST(request: Request) {
     }
 
     const call = message.content.find((block) => block.type === "tool_use");
+    skipped = call?.name === SKIP_TOOL_NAME;
     input = call?.input;
   } catch (e) {
     if (isAiFailure(e)) {
@@ -167,16 +198,17 @@ export async function POST(request: Request) {
     );
   }
 
+  if (skipped) {
+    return Response.json({ episode: null, reason: "nothing-new" });
+  }
+
   const episode = normalize(input);
 
+  // The model called save_episode but the card came back empty. Same outcome as
+  // a skip from the student's side — there is simply nothing to show yet — so
+  // it is not dressed up as an error nobody asked for.
   if (!episode) {
-    return Response.json(
-      {
-        error:
-          "エピソードとして残せる具体的な話がまだ足りないようです。もう少し壁打ちを続けてみてください。",
-      },
-      { status: 422 },
-    );
+    return Response.json({ episode: null, reason: "empty-card" });
   }
 
   return Response.json({ episode });

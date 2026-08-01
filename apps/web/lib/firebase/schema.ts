@@ -54,6 +54,15 @@ export type Session = {
   /** Number of student turns — what the history screen shows as 「N往復」. */
   turnCount: number;
   episodeCount: number;
+  /**
+   * How many transcript lines had been read the last time an episode was
+   * extracted from this 壁打ち.
+   *
+   * Extraction runs on its own now, so something has to say what has already
+   * been looked at. Comparing this against the transcript length is what makes
+   * a re-run a re-run of the *new* part rather than of the whole conversation.
+   */
+  extractedCount: number;
   createdAt: Date | null;
   updatedAt: Date | null;
 };
@@ -134,6 +143,12 @@ export function toSession(id: string, d: DocumentData): Session {
     status: d.status === "closed" ? "closed" : "open",
     turnCount: typeof d.turnCount === "number" ? d.turnCount : 0,
     episodeCount: typeof d.episodeCount === "number" ? d.episodeCount : 0,
+    // Sessions created before extraction became automatic have no counter.
+    // Reading them as 0 means their first automatic run looks at the whole
+    // transcript, which is what you want — nothing has been read by this
+    // mechanism yet, and the duplicate check catches anything the old manual
+    // button already saved.
+    extractedCount: typeof d.extractedCount === "number" ? d.extractedCount : 0,
     createdAt: toDate(d.createdAt),
     updatedAt: toDate(d.updatedAt),
   };
