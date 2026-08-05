@@ -8,6 +8,7 @@
     "start": "next start",
     "check:claude": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-claude-guards.mjs",
     "check:extraction": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-extraction-guards.mjs",
+    "check:loading": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-loading-guards.mjs",
     "check:gemini": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-gemini-guards.mjs",
     "simulate:chat": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/simulate-long-conversation.mjs"
   },

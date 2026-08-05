@@ -1,36 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
+import { ScreenError, ScreenLoading } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { listSessions } from "@/lib/firebase/sessions";
-import { formatShortDate, type Session } from "@/lib/firebase/schema";
+import { formatShortDate } from "@/lib/firebase/schema";
+import { useLoadable } from "@/lib/use-loadable";
 import { fs, T } from "@/lib/theme";
 
 // Sessions are saved automatically; tapping one resumes it, so a conversation
 // is never consumed in a single sitting.
 export default function HistoryPage() {
   const { user } = useAuth();
-  const [sessions, setSessions] = useState<Session[] | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-
-    listSessions(user.uid)
-      .then((rows) => {
-        if (!cancelled) setSessions(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+  const {
+    data: sessions,
+    error,
+    loading,
+    retry,
+  } = useLoadable(user?.uid ?? null, listSessions, {
+    message: "記録を読み込めませんでした。",
+  });
 
   return (
     <>
@@ -38,17 +28,11 @@ export default function HistoryPage() {
       {/* The shell no longer scrolls, so every screen owns the panel that does. */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
 
-      {error && (
-        <div role="alert" style={{ fontSize: fs(12), color: T.karakuchi, lineHeight: 1.9 }}>
-          記録を読み込めませんでした。ページを再読み込みしてください。
-        </div>
-      )}
+      {error && <ScreenError message={error} onRetry={retry} />}
 
-      {!error && sessions === null && (
-        <div style={{ fontSize: fs(12), color: T.sub }}>読み込んでいます…</div>
-      )}
+      {loading && <ScreenLoading />}
 
-      {!error && sessions?.length === 0 && (
+      {sessions?.length === 0 && (
         <div style={{ fontSize: fs(12.5), color: T.sub, lineHeight: 1.9 }}>
           まだ記録はありません。
           <br />

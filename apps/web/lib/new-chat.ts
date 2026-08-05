@@ -1,6 +1,7 @@
 import { defaultTheme } from "@socius/prompts";
 import { createSession } from "./firebase/sessions";
 import type { ChatMode, OnboardingProfile } from "./firebase/schema";
+import { LOAD_TIMEOUT_MS, withTimeout } from "./with-timeout";
 
 /**
  * Start a 壁打ち, from wherever the student pressed the button.
@@ -18,11 +19,18 @@ export async function startChat(
   uid: string,
   opts: { mode: ChatMode; profile: OnboardingProfile | null },
 ): Promise<string> {
-  const created = await createSession(uid, {
-    // 「新しい壁打ち」 is a placeholder the student's first message replaces.
-    title: "新しい壁打ち",
-    theme: defaultTheme(opts.profile),
-    mode: opts.mode,
-  });
+  // Bounded, because both callers disable their button while this runs and the
+  // id is what they navigate with. A write that is never acknowledged would
+  // leave 「準備しています…」 on screen with nothing coming.
+  const created = await withTimeout(
+    createSession(uid, {
+      // 「新しい壁打ち」 is a placeholder the student's first message replaces.
+      title: "新しい壁打ち",
+      theme: defaultTheme(opts.profile),
+      mode: opts.mode,
+    }),
+    LOAD_TIMEOUT_MS,
+    "新しい壁打ちを始められませんでした。",
+  );
   return created.id;
 }

@@ -9,6 +9,7 @@ import {
   saveSettings,
   type AppSettings,
 } from "@/lib/firebase/settings";
+import { LOAD_TIMEOUT_MS, withTimeout } from "@/lib/with-timeout";
 
 /**
  * Applies the student's appearance settings to the document, and remembers
@@ -86,7 +87,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     setLoading(true);
 
-    getSettings(user.uid)
+    // Bounded like every other read in the app. Nothing renders on this
+    // provider's `loading` today, but a promise that never settles is a
+    // loading state waiting for someone to gate on it.
+    withTimeout(getSettings(user.uid), LOAD_TIMEOUT_MS, "settings read timed out")
       .then((saved) => {
         if (!cancelled) setSettings(saved);
       })

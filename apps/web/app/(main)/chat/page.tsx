@@ -7,12 +7,14 @@ import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
+import { ScreenError } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
 import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
-import { openChat, appendMessage, updateSessionMeta, type OpenedChat } from "@/lib/firebase/sessions";
+import { openChat, appendMessage, updateSessionMeta } from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
 import { startChat } from "@/lib/new-chat";
+import { useLoadable } from "@/lib/use-loadable";
 import { ApiError, postStream } from "@/lib/api-client";
 import { fs, T } from "@/lib/theme";
 
@@ -51,10 +53,6 @@ function ChatScreen() {
     tone: ChatMode;
     theme: string;
   } | null>(null);
-  // Kept apart from `error`: this one means there is no conversation on screen
-  // to attach a message to, so it needs the whole screen and a way out.
-  const [openError, setOpenError] = useState<string | null>(null);
-  const [openAttempt, setOpenAttempt] = useState(0);
   const [creatingSession, setCreatingSession] = useState(false);
 
   const profile = userDoc?.profile ?? null;
@@ -66,12 +64,22 @@ function ChatScreen() {
   const theme = defaultTheme(profile);
 
   const bottomRef = useRef<HTMLDivElement>(null);
-  // The request to open a session, remembered so that the two runs React makes
-  // of the same mount in development share one — the first run is cancelled
-  // the instant it starts, so anything the second run declines to redo is work
-  // nobody is left listening for.
-  const openRequest = useRef<{ key: string; promise: Promise<OpenedChat> } | null>(
-    null,
+
+  // Which conversation to show: the one a link pointed at, otherwise the most
+  // recent unfinished 壁打ち, otherwise a new one. Loaded the same way every
+  // other screen loads its data — including the deadline, which is what stops
+  // an unreachable backend from leaving 「読み込んでいます…」 on screen forever.
+  const opened = useLoadable(
+    user?.uid ?? null,
+    (uid) =>
+      openChat(uid, {
+        resumeId,
+        fallback: { title: "新しい壁打ち", theme, mode: "counselor" },
+      }),
+    {
+      message: "壁打ちを読み込めませんでした。",
+      scope: resumeId ?? "latest",
+    },
   );
 
   /** Ask Gemini for the next line and append it to the transcript. */
@@ -122,66 +130,44 @@ function ChatScreen() {
   // dependency of the effect below: a new identity for either would re-open the
   // session and wipe the screen out from under a conversation in progress.
   const requestReplyRef = useRef(requestReply);
+  const themeRef = useRef(theme);
   useEffect(() => {
     requestReplyRef.current = requestReply;
-  }, [requestReply]);
+    themeRef.current = theme;
+  }, [requestReply, theme]);
 
-  // Open the session: resume the one the history screen pointed at, otherwise
-  // pick up the most recent unfinished 壁打ち, otherwise start a new one.
+  // A 壁打ち with nothing in it is one the AI has to open, and it must be asked
+  // exactly once. React mounts every component twice in development, and a
+  // retry re-runs the load — neither is a second empty conversation.
+  const primed = useRef(new Set<string>());
+
+  // Put what was loaded on screen. Held in state rather than read straight off
+  // the loader because the conversation grows from here: every message the
+  // student sends is appended to this copy — which is also why what was loaded
+  // is the only dependency. Anything else in here re-running would replace a
+  // conversation in progress with the transcript it started from.
   useEffect(() => {
-    if (!user) return;
-
-    const uid = user.uid;
-    const key = `${uid}:${resumeId ?? "latest"}:${openAttempt}`;
+    const loaded = opened.data;
 
     // Switching threads from the drawer would otherwise leave the previous
     // conversation on screen under the new session's header until its
     // transcript arrived.
-    setSession(null);
-    setMessages([]);
+    setSession(loaded?.session ?? null);
+    setMessages(loaded?.messages ?? []);
     setStreaming("");
     setError(null);
-    setOpenError(null);
 
-    if (openRequest.current?.key !== key) {
-      openRequest.current = {
-        key,
-        promise: openChat(uid, {
-          resumeId,
-          fallback: { title: "新しい壁打ち", theme, mode: "counselor" },
-        }),
-      };
-    }
+    if (!loaded || loaded.messages.length > 0) return;
+    if (primed.current.has(loaded.session.id)) return;
 
-    let cancelled = false;
-
-    openRequest.current.promise.then(
-      ({ session: opened, messages: history }) => {
-        if (cancelled) return;
-
-        setSession(opened);
-        setMessages(history);
-
-        // A session with no transcript yet is one the AI has to open.
-        if (history.length === 0) {
-          void requestReplyRef.current(
-            opened.id,
-            [],
-            opened.mode,
-            opened.theme || theme,
-          );
-        }
-      },
-      () => {
-        if (cancelled) return;
-        setOpenError("壁打ちを読み込めませんでした。");
-      },
+    primed.current.add(loaded.session.id);
+    void requestReplyRef.current(
+      loaded.session.id,
+      [],
+      loaded.session.mode,
+      loaded.session.theme || themeRef.current,
     );
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user, resumeId, theme, openAttempt]);
+  }, [opened.data]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -291,46 +277,12 @@ function ChatScreen() {
   };
 
   if (!session) {
-    return openError ? (
+    return opened.error ? (
       // The header comes too, so a 壁打ち that will not load is not also a
       // screen with no way off it.
       <>
         <AppHeader title="壁打ち" />
-        <div
-          role="alert"
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 14,
-            padding: 24,
-            textAlign: "center",
-          }}
-        >
-          <div style={{ fontSize: fs(12.5), color: T.karakuchi, lineHeight: 1.9 }}>
-            {openError}
-            <br />
-            通信状況を確認して、もう一度お試しください。
-          </div>
-          <button
-            type="button"
-            onClick={() => setOpenAttempt((n) => n + 1)}
-            style={{
-              padding: "9px 24px",
-              borderRadius: 10,
-              border: `1.5px solid ${T.primary}`,
-              background: T.primarySoft,
-              color: T.primary,
-              fontSize: fs(12),
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
-            再試行
-          </button>
-        </div>
+        <ScreenError message={opened.error} onRetry={opened.retry} fill />
       </>
     ) : (
       <AuthSplash />

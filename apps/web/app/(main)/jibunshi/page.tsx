@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { EPISODE_PERIODS, type EpisodePeriod } from "@socius/prompts";
 import { AppHeader } from "@/components/AppHeader";
 import { JibunshiTimeline } from "@/components/JibunshiTimeline";
+import { ScreenError, ScreenLoading } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
 import {
   deleteEpisode,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/firebase/episodes";
 import type { Episode, Star } from "@/lib/firebase/schema";
 import { bucketByPeriod } from "@/lib/jibunshi-periods";
+import { useLoadable } from "@/lib/use-loadable";
 import { fs, T } from "@/lib/theme";
 
 /** What an edit can change. The AI's tag and emotion are not the student's to retype. */
@@ -34,31 +36,24 @@ const STAR_LABELS: { key: keyof Star; label: string }[] = [
 // TODO(v0.2): Markdown export.
 export default function JibunshiPage() {
   const { user } = useAuth();
+  const loaded = useLoadable(user?.uid ?? null, listEpisodes, {
+    message: "エピソードを読み込めませんでした。",
+  });
+
+  // The screen keeps its own copy of what it loaded, because these cards are
+  // the student's to edit and delete: an edit has to show up the moment it is
+  // made, not when a re-read agrees that it happened.
   const [episodes, setEpisodes] = useState<Episode[] | null>(null);
-  const [error, setError] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   // Where each card ended up, so the timeline above can send the student to one.
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
 
   useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-
-    listEpisodes(user.uid)
-      .then((rows) => {
-        if (cancelled) return;
-        setEpisodes(rows);
-        setOpenId(rows[0]?.id ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+    setEpisodes(loaded.data);
+    // Newest first, so the top card is the one they just made.
+    setOpenId(loaded.data?.[0]?.id ?? null);
+  }, [loaded.data]);
 
   /** Open the card the student picked off the timeline, and go to it. */
   const revealEpisode = (id: string) => {
@@ -98,21 +93,14 @@ export default function JibunshiPage() {
         ここにある言葉は、すべてあなた自身が話したことです。
       </p>
 
-      {error && (
-        <div
-          role="alert"
-          style={{ fontSize: fs(12), color: T.karakuchi, lineHeight: 1.9, marginBottom: 14 }}
-        >
-          エピソードを読み込めませんでした。ページを再読み込みしてください。
-        </div>
-      )}
+      {loaded.error && <ScreenError message={loaded.error} onRetry={loaded.retry} />}
 
       {/*
         The year table comes first, and is drawn whether or not there is
         anything to put on it. A student with nothing saved should see the shape
         of what they are filling in, not a screen that says まだありません.
       */}
-      {!error && (
+      {!loaded.error && (
         <JibunshiTimeline
           buckets={bucketByPeriod(episodes ?? [])}
           onPick={revealEpisode}
@@ -120,11 +108,9 @@ export default function JibunshiPage() {
         />
       )}
 
-      {!error && episodes === null && (
-        <div style={{ fontSize: fs(12), color: T.sub }}>読み込んでいます…</div>
-      )}
+      {loaded.loading && <ScreenLoading />}
 
-      {!error && episodes?.length === 0 && (
+      {episodes?.length === 0 && (
         <div style={{ fontSize: fs(12.5), color: T.sub, lineHeight: 1.9 }}>
           壁打ちで具体的な出来事を話すと、
           <br />

@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
+import { ScreenError } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { listEpisodes } from "@/lib/firebase/episodes";
 import { listSessions } from "@/lib/firebase/sessions";
 import { formatShortDate, type Episode, type Session } from "@/lib/firebase/schema";
 import { PERIOD_SHORT, periodsFilled, TIMELINE_PERIODS } from "@/lib/jibunshi-periods";
 import { startChat } from "@/lib/new-chat";
+import { useLoadable } from "@/lib/use-loadable";
 import { fs, T } from "@/lib/theme";
 
 /**
@@ -32,32 +34,30 @@ type Summary = {
 export default function HomePage() {
   const router = useRouter();
   const { user, userDoc } = useAuth();
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [error, setError] = useState(false);
   const [starting, setStarting] = useState(false);
+  // Kept apart from the load failure: this one is about the button the student
+  // just pressed, and the button is its own 再試行.
+  const [startError, setStartError] = useState(false);
 
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
+  const loaded = useLoadable(
+    user?.uid ?? null,
+    async (uid): Promise<Summary> => {
+      const [episodes, sessions] = await Promise.all([
+        listEpisodes(uid),
+        listSessions(uid),
+      ]);
+      // listSessions is already newest-first.
+      return { episodes, latest: sessions[0] ?? null };
+    },
+    { message: "進み具合を読み込めませんでした。" },
+  );
 
-    Promise.all([listEpisodes(user.uid), listSessions(user.uid)])
-      .then(([episodes, sessions]) => {
-        if (cancelled) return;
-        // listSessions is already newest-first.
-        setSummary({ episodes, latest: sessions[0] ?? null });
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+  const summary = loaded.data;
 
   const begin = async () => {
     if (!user || starting) return;
     setStarting(true);
+    setStartError(false);
     try {
       const id = await startChat(user.uid, {
         mode: summary?.latest?.mode ?? "counselor",
@@ -66,7 +66,7 @@ export default function HomePage() {
       router.push(`/chat?s=${id}`);
     } catch {
       setStarting(false);
-      setError(true);
+      setStartError(true);
     }
   };
 
@@ -83,7 +83,9 @@ export default function HomePage() {
           自分史は、話した分だけ埋まります。
         </p>
 
-        {error && (
+        {loaded.error && <ScreenError message={loaded.error} onRetry={loaded.retry} />}
+
+        {startError && (
           <div
             role="alert"
             style={{
@@ -93,7 +95,7 @@ export default function HomePage() {
               lineHeight: 1.9,
             }}
           >
-            進み具合を読み込めませんでした。ページを再読み込みしてください。
+            壁打ちを始められませんでした。通信状況を確認して、もう一度押してください。
           </div>
         )}
 

@@ -40,6 +40,15 @@ export function usageDay(now: Date = new Date()): string {
   }).format(now);
 }
 
+/**
+ * How long the counter gets before the turn goes ahead without it.
+ *
+ * This runs before a single token of the reply is written, so a Firestore REST
+ * call that hangs is a student watching 「考えています…」 over a request that has
+ * not started. Short on purpose: the cap is worth a moment, not a conversation.
+ */
+const USAGE_TIMEOUT_MS = 5_000;
+
 function documentUrl(uid: string, day: string): string {
   return (
     `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}` +
@@ -56,6 +65,7 @@ export async function readUsage(
   const res = await fetch(documentUrl(uid, day), {
     headers: { authorization: `Bearer ${idToken}` },
     cache: "no-store",
+    signal: AbortSignal.timeout(USAGE_TIMEOUT_MS),
   });
 
   if (res.status === 404) return 0;
@@ -99,6 +109,7 @@ export async function writeUsage(
         updatedAt: { timestampValue: new Date().toISOString() },
       },
     }),
+    signal: AbortSignal.timeout(USAGE_TIMEOUT_MS),
   });
 
   if (!res.ok) throw new Error(`usage write failed: ${res.status}`);

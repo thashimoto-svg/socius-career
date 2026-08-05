@@ -11,7 +11,6 @@ import {
   where,
   deleteDoc,
 } from "firebase/firestore";
-import { withTimeout } from "../with-timeout";
 import {
   messagesRef,
   sessionRef,
@@ -98,18 +97,15 @@ export async function getSessionMessages(
   return snap.docs.map((d) => toMessage(d.id, d.data()));
 }
 
-/** How long /chat waits for a session and its transcript before giving up. */
-const OPEN_TIMEOUT_MS = 10_000;
-
 export type OpenedChat = { session: Session; messages: Message[] };
 
 /**
  * Everything the 壁打ち screen needs to start rendering: which conversation to
  * continue, and what has been said in it so far.
  *
- * Bounded on purpose. Whatever goes wrong underneath — an unreachable backend,
- * a rule that says no, an index that is still building — has to end in either a
- * session or an error, because the screen has no third state to offer.
+ * The deadline that used to be written here is not gone — it moved to
+ * lib/use-loadable, which now puts one on every screen's data rather than on
+ * the single screen this bug was first reported against.
  */
 export async function openChat(
   uid: string,
@@ -119,19 +115,13 @@ export async function openChat(
     fallback: { title: string; theme: string; mode: ChatMode };
   },
 ): Promise<OpenedChat> {
-  return withTimeout(
-    (async () => {
-      const session =
-        // A link to a session that no longer exists falls through to the
-        // normal path rather than stranding the student on a blank screen.
-        (opts.resumeId ? await resumeById(uid, opts.resumeId) : null) ??
-        (await getOrCreateOpenSession(uid, opts.fallback));
+  const session =
+    // A link to a session that no longer exists falls through to the normal
+    // path rather than stranding the student on a blank screen.
+    (opts.resumeId ? await resumeById(uid, opts.resumeId) : null) ??
+    (await getOrCreateOpenSession(uid, opts.fallback));
 
-      return { session, messages: await getSessionMessages(uid, session.id) };
-    })(),
-    OPEN_TIMEOUT_MS,
-    "壁打ちの読み込みに時間がかかりすぎています。",
-  );
+  return { session, messages: await getSessionMessages(uid, session.id) };
 }
 
 /**

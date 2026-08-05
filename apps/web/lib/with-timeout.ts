@@ -9,6 +9,15 @@
  * The underlying work is not cancelled; nothing here can cancel it. It is
  * simply no longer awaited.
  */
+/**
+ * How long any screen waits for the data it cannot render without.
+ *
+ * One number for the whole app rather than one per screen: a student who has
+ * learned how long 「読み込んでいます…」 lasts before it turns into something they
+ * can act on has learned it about the app, not about the 壁打ち screen.
+ */
+export const LOAD_TIMEOUT_MS = 10_000;
+
 export function withTimeout<T>(
   promise: Promise<T>,
   ms: number,

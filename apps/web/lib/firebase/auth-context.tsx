@@ -16,6 +16,7 @@ import {
   signOut as firebaseSignOut,
   type User,
 } from "firebase/auth";
+import { LOAD_TIMEOUT_MS, withTimeout } from "../with-timeout";
 import { getFirebaseAuth } from "./client";
 import { ensureUserDoc } from "./users";
 import type { OnboardingProfile, UserDoc } from "./schema";
@@ -75,7 +76,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const recordConsent = pendingConsent.current;
       pendingConsent.current = false;
 
-      ensureUserDoc(next, { recordConsent })
+      // Bounded, because everything else waits on it. `loading` is what
+      // RequireAuth renders 「読み込んでいます…」 for, and it clears in the
+      // `finally` — which only runs if this settles. Firestore on an
+      // unreachable backend does not settle on its own.
+      withTimeout(
+        ensureUserDoc(next, { recordConsent }),
+        LOAD_TIMEOUT_MS,
+        "プロフィールの読み込みに時間がかかりすぎています。",
+      )
         .then((doc) => {
           if (gen !== generation.current) return;
           setUserDoc(doc);

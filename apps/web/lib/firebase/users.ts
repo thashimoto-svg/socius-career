@@ -13,6 +13,13 @@ import {
  *
  * Merged rather than overwritten: `profile` and `onboardingCompleted` belong to
  * the student's own answers and must survive a re-login.
+ *
+ * Every screen in the app waits on this, so what it waits on matters. Only the
+ * read is awaited. Refreshing a returning student's display name is
+ * housekeeping — nothing on any screen reads it back, and a Firestore write
+ * does not resolve until the server acknowledges it, which on a bad connection
+ * is never. Blocking the first paint of the whole app on that acknowledgement
+ * is how 「読み込んでいます…」 becomes permanent.
  */
 export async function ensureUserDoc(
   user: User,
@@ -31,6 +38,11 @@ export async function ensureUserDoc(
   if (!snap.exists()) {
     // Reaching a first sign-in at all means the consent checkbox was ticked —
     // it is what enables the button.
+    //
+    // This one is awaited, unlike the refresh below: it is the write that makes
+    // the account exist and the one that records the consent, and letting a
+    // student into the app before either has landed would be claiming something
+    // that has not happened. Its caller puts a deadline on it.
     await setDoc(ref, {
       ...identity,
       profile: null,
@@ -60,7 +72,13 @@ export async function ensureUserDoc(
       ? { agreedToTermsAt: serverTimestamp() }
       : {};
 
-  await setDoc(ref, { ...identity, ...consent }, { merge: true });
+  // Not awaited: see above. The write is queued and will land when it can —
+  // including after a reload, since the SDK keeps it — and the student gets
+  // their app now either way.
+  void setDoc(ref, { ...identity, ...consent }, { merge: true }).catch((e) => {
+    console.error("[users] could not refresh the profile fields", e);
+  });
+
   return existing;
 }
 
