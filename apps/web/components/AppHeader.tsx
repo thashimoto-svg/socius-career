@@ -77,9 +77,10 @@ export function AppHeader({
 
   return (
     <>
-      {user && (
+      {/* Mounted only while open, so each open reads the list again rather
+          than replaying whatever the last one happened to get. */}
+      {user && drawerOpen && (
         <SessionDrawer
-          open={drawerOpen}
           onClose={() => setDrawerOpen(false)}
           uid={user.uid}
           currentSessionId={currentSessionId}

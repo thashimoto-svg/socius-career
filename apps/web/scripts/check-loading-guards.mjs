@@ -76,6 +76,41 @@ console.log("\n全画面 — 素手でデータを取っている画面はない
 
 const SCREENS = new URL("../app/(main)/", import.meta.url);
 
+// 名前で数える。useLoadable には関数を「呼ばずに」渡す画面もあるので、
+// 呼び出しの形（末尾の括弧）で探すと取りこぼす。
+const LOADERS = [
+  "listEpisodes",
+  "listSessions",
+  "openChat",
+  "getUserDoc",
+  "getSettings",
+];
+
+/**
+ * 取得しているなら、締め切りと再試行を持っていること。
+ *
+ * withTimeout を直に呼ぶのも可 — settings provider のように、失敗しても
+ * 既定値で動く読み込みに画面用のエラー UI は要らない。禁じたいのは素手、
+ * つまりどちらも通していない取得だけ。
+ */
+function auditLoads(label, source) {
+  if (!LOADERS.some((name) => source.includes(name))) {
+    console.log(`  --   ${label} は自分でデータを取っていない`);
+    return;
+  }
+
+  const bounded = source.includes("useLoadable") || source.includes("withTimeout");
+  check(`${label} は締め切りつきで読み込む`, bounded, "素手の読み込みが残っている");
+
+  if (source.includes("useLoadable")) {
+    check(
+      `${label} は失敗を再試行つきで見せる`,
+      source.includes("ScreenError"),
+      "エラー時に student のやることがない",
+    );
+  }
+}
+
 for (const dir of readdirSync(SCREENS, { withFileTypes: true })) {
   if (!dir.isDirectory()) continue;
 
@@ -86,28 +121,23 @@ for (const dir of readdirSync(SCREENS, { withFileTypes: true })) {
     continue;
   }
 
-  // 名前で数える。useLoadable には関数を「呼ばずに」渡す画面もあるので、
-  // 呼び出しの形（末尾の括弧）で探すと取りこぼす。
-  const LOADERS = ["listEpisodes", "listSessions", "openChat", "getUserDoc"];
-
   // 設定画面は provider から読む — 自前の取得をしていない画面に
   // useLoadable を強制しても意味がない。
-  const fetches = LOADERS.some((name) => source.includes(name));
-  if (!fetches) {
-    console.log(`  --   /${dir.name} は自分でデータを取っていない`);
-    continue;
-  }
+  auditLoads(`/${dir.name}`, source);
+}
 
-  check(
-    `/${dir.name} は useLoadable 経由で読み込む`,
-    source.includes("useLoadable"),
-    "締め切りも再試行もない読み込みが残っている",
-  );
-  check(
-    `/${dir.name} は失敗を再試行つきで見せる`,
-    source.includes("ScreenError"),
-    "エラー時に student のやることがない",
-  );
+// ---------------------------------------------------------------------------
+console.log("\n部品 — 画面でなくても、取得しているなら締め切りがある");
+// ---------------------------------------------------------------------------
+
+// ドロワーは画面ではないので page.tsx の巡回に入らず、素手の listSessions が
+// 一つだけ残っていた。開くたび 「読み込んでいます…」 のまま戻らなくなる場所が、
+// 画面と同じだけあるということ。app/ の外も同じ規則で見る。
+const COMPONENTS = new URL("../components/", import.meta.url);
+
+for (const file of readdirSync(COMPONENTS, { withFileTypes: true })) {
+  if (!file.isFile() || !file.name.endsWith(".tsx")) continue;
+  auditLoads(file.name, readFileSync(new URL(file.name, COMPONENTS), "utf8"));
 }
 
 console.log(

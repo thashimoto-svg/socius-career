@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { ScreenError, ScreenLoading } from "@/components/screen-state";
 import { listSessions } from "@/lib/firebase/sessions";
-import { formatShortDate, type Session } from "@/lib/firebase/schema";
+import { formatShortDate } from "@/lib/firebase/schema";
+import { useLoadable } from "@/lib/use-loadable";
 import { fs, T } from "@/lib/theme";
 
 type SessionDrawerProps = {
-  open: boolean;
   onClose: () => void;
   uid: string;
   /** Highlighted in the list so the student can see where they are. */
@@ -29,9 +30,12 @@ type SessionDrawerProps = {
  * switch conversations is the wrong shape for it: 「対話が単発で消費されない」
  * means moving between threads should feel like part of the 壁打ち, not like
  * navigating away from it. Both routes stay.
+ *
+ * Mounted only while it is open, which is what makes each open a fresh read: a
+ * session's title and updatedAt change as the student talks, so a list left
+ * over from the last open would be stale.
  */
 export function SessionDrawer({
-  open,
   onClose,
   uid,
   currentSessionId,
@@ -39,40 +43,25 @@ export function SessionDrawer({
   onNewSession,
   creating,
 }: SessionDrawerProps) {
-  const [sessions, setSessions] = useState<Session[] | null>(null);
-  const [error, setError] = useState(false);
-
-  // Re-read on every open: a session's title and updatedAt change as the
-  // student talks, so a list cached from the last open would be stale.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-
-    setSessions(null);
-    setError(false);
-    listSessions(uid)
-      .then((rows) => {
-        if (!cancelled) setSessions(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, uid]);
+  // Loaded the same way every screen loads its data. This used to be a bare
+  // listSessions() with a .catch, which is the shape that cannot recover from
+  // the failure that actually happens: an unreachable backend leaves the
+  // promise unsettled rather than rejecting it, so the catch never runs and
+  // 「読み込んでいます…」 stays on screen with no way out of it.
+  const {
+    data: sessions,
+    error,
+    loading,
+    retry,
+  } = useLoadable(uid, listSessions, { message: "記録を読み込めませんでした。" });
 
   useEffect(() => {
-    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
+  }, [onClose]);
 
   return (
     <>
@@ -171,17 +160,11 @@ export function SessionDrawer({
             padding: "4px 12px calc(env(safe-area-inset-bottom, 0px) + 16px)",
           }}
         >
-          {error && (
-            <div role="alert" style={{ fontSize: fs(11.5), color: T.karakuchi, lineHeight: 1.9 }}>
-              記録を読み込めませんでした。
-            </div>
-          )}
+          {error && <ScreenError message={error} onRetry={retry} />}
 
-          {!error && sessions === null && (
-            <div style={{ fontSize: fs(11.5), color: T.sub }}>読み込んでいます…</div>
-          )}
+          {loading && <ScreenLoading />}
 
-          {!error && sessions?.length === 0 && (
+          {sessions?.length === 0 && (
             <div style={{ fontSize: fs(11.5), color: T.sub, lineHeight: 1.9 }}>
               まだ記録はありません。
             </div>
