@@ -1,6 +1,7 @@
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
+import { mark } from "../perf";
 
 /**
  * Browser-side Firebase entry point.
@@ -38,18 +39,34 @@ export function getFirebaseApp(): FirebaseApp {
     );
   }
 
-  return initializeApp(firebaseConfig);
+  mark("firebase:initializeApp 直前");
+  const app = initializeApp(firebaseConfig);
+  mark("firebase:initializeApp 完了");
+  return app;
 }
 
 let authInstance: Auth | undefined;
 let firestoreInstance: Firestore | undefined;
 
 export function getFirebaseAuth(): Auth {
-  authInstance ??= getAuth(getFirebaseApp());
+  if (!authInstance) {
+    const app = getFirebaseApp();
+    // getAuth is where the SDK picks its persistence and opens IndexedDB, so
+    // this call — not the subscription after it — is the one that can stall on
+    // a browser with storage blocked.
+    mark("firebase:getAuth 直前");
+    authInstance = getAuth(app);
+    mark("firebase:getAuth 完了");
+  }
   return authInstance;
 }
 
 export function getDb(): Firestore {
-  firestoreInstance ??= getFirestore(getFirebaseApp());
+  if (!firestoreInstance) {
+    const app = getFirebaseApp();
+    mark("firebase:getFirestore 直前");
+    firestoreInstance = getFirestore(app);
+    mark("firebase:getFirestore 完了");
+  }
   return firestoreInstance;
 }

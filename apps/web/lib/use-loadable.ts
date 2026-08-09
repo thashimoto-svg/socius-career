@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { mark } from "./perf";
 import { LOAD_TIMEOUT_MS, withTimeout } from "./with-timeout";
 
 /**
@@ -83,7 +84,14 @@ export function useLoadable<T>(
     // screen belongs to the previous key and is not an answer to this one.
     setState({ data: null, error: null });
 
+    const scope = optsRef.current.scope ?? "";
+
     if (inflight.current?.key !== key) {
+      // Deliberately marked here rather than at the top of the effect: this is
+      // the moment the screen's own network work starts, and the gap between it
+      // and gate:開通 above is the waterfall — two round trips that could have
+      // been one.
+      mark(`screen:${scope} 取得開始`);
       inflight.current = {
         key,
         promise: withTimeout(
@@ -98,6 +106,7 @@ export function useLoadable<T>(
 
     inflight.current.promise.then(
       (value) => {
+        mark(`screen:${scope} 取得完了`);
         if (!cancelled) setState({ data: value, error: null });
       },
       (e) => {

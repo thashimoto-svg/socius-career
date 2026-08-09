@@ -16,6 +16,7 @@ import {
   signOut as firebaseSignOut,
   type User,
 } from "firebase/auth";
+import { mark } from "../perf";
 import { LOAD_TIMEOUT_MS, withTimeout } from "../with-timeout";
 import { getFirebaseAuth } from "./client";
 import { ensureUserDoc } from "./users";
@@ -101,9 +102,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       // Firebase reads the persisted session from IndexedDB asynchronously, so
       // the first callback is what tells us whether anyone is actually signed in.
-      unsubscribe = onAuthStateChanged(getFirebaseAuth(), (next) => {
+      const auth = getFirebaseAuth();
+      mark("auth:onAuthStateChanged 購読");
+      unsubscribe = onAuthStateChanged(auth, (next) => {
         settled = true;
         clearTimeout(deadline);
+        mark(`auth:発火 (${next ? "サインイン済み" : "サインアウト"})`);
 
         const gen = ++generation.current;
         setUser(next);
@@ -112,6 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!next) {
           setUserDoc(null);
           setLoading(false);
+          mark("gate:開通 (サインアウト)");
           return;
         }
 
@@ -122,12 +127,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Bounded for the same reason. `loading` clears in the `finally`, which
         // only runs if this settles, and Firestore on an unreachable backend
         // does not settle on its own.
+        mark("userdoc:users/{uid} 読み取り開始");
         withTimeout(
           ensureUserDoc(next, { recordConsent }),
           LOAD_TIMEOUT_MS,
           "プロフィールの読み込みに時間がかかりすぎています。",
         )
           .then((doc) => {
+            mark("userdoc:読み取り完了");
             if (gen !== generation.current) return;
             setUserDoc(doc);
           })
@@ -143,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .finally(() => {
             if (gen !== generation.current) return;
             setLoading(false);
+            mark("gate:開通 — ここで初めて画面が描かれ始める");
           });
       });
     } catch (e) {
