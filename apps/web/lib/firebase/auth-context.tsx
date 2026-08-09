@@ -34,6 +34,15 @@ type AuthValue = {
   /** Set when the last sign-in attempt failed, for display to the student. */
   error: string | null;
   /**
+   * Set when the gate itself failed — the session could not be restored, or the
+   * profile behind it could not be read. Distinct from `error`, which is about
+   * a sign-in the student just attempted: this is about the app being unable to
+   * say who they are, which is what every screen is waiting on.
+   */
+  blocked: string | null;
+  /** Try the gate again. What the 再試行 button on the splash calls. */
+  retryAuth: () => void;
+  /**
    * `agreedToTerms` records the consent the login screen's checkbox gates the
    * button on, so the fact is stored against the account that gave it.
    */
@@ -50,6 +59,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userDoc, setUserDoc] = useState<UserDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   // Signing out right after signing in would otherwise let the slower user-doc
   // fetch land last and resurrect a signed-out student's profile.
@@ -60,51 +71,102 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pendingConsent = useRef(false);
 
   useEffect(() => {
-    // Firebase reads the persisted session from IndexedDB asynchronously, so
-    // the first callback is what tells us whether anyone is actually signed in.
-    return onAuthStateChanged(getFirebaseAuth(), (next) => {
-      const gen = ++generation.current;
-      setUser(next);
+    setBlocked(null);
+    setLoading(true);
 
-      if (!next) {
-        setUserDoc(null);
-        setLoading(false);
-        return;
-      }
+    /**
+     * The deadline on the gate itself.
+     *
+     * Every screen's own load has had one since the 壁打ち bug, but all of them
+     * sit behind this: RequireAuth renders 「読み込んでいます…」 while `loading`,
+     * and `loading` only ever cleared inside the callback below. Firebase reads
+     * the persisted session out of IndexedDB, and that read does not always come
+     * back — storage blocked, a private window, an embedded webview. When it
+     * doesn't, the callback never fires, `loading` stays true, and the splash
+     * stays on screen forever with no 再試行 on it, because a screen that never
+     * got as far as loading its data cannot show its own error.
+     *
+     * So the gate gets the same deadline as everything behind it. Timing out
+     * here does not claim the student is signed out — it says we could not find
+     * out, which is a different sentence and one they can act on.
+     */
+    let settled = false;
+    const deadline = setTimeout(() => {
+      if (settled) return;
+      setBlocked("サインイン状態を確認できませんでした。");
+      setLoading(false);
+    }, LOAD_TIMEOUT_MS);
 
-      setLoading(true);
-      const recordConsent = pendingConsent.current;
-      pendingConsent.current = false;
+    let unsubscribe: () => void;
+    try {
+      // Firebase reads the persisted session from IndexedDB asynchronously, so
+      // the first callback is what tells us whether anyone is actually signed in.
+      unsubscribe = onAuthStateChanged(getFirebaseAuth(), (next) => {
+        settled = true;
+        clearTimeout(deadline);
 
-      // Bounded, because everything else waits on it. `loading` is what
-      // RequireAuth renders 「読み込んでいます…」 for, and it clears in the
-      // `finally` — which only runs if this settles. Firestore on an
-      // unreachable backend does not settle on its own.
-      withTimeout(
-        ensureUserDoc(next, { recordConsent }),
-        LOAD_TIMEOUT_MS,
-        "プロフィールの読み込みに時間がかかりすぎています。",
-      )
-        .then((doc) => {
-          if (gen !== generation.current) return;
-          setUserDoc(doc);
-        })
-        .catch(() => {
-          if (gen !== generation.current) return;
+        const gen = ++generation.current;
+        setUser(next);
+        setBlocked(null);
+
+        if (!next) {
           setUserDoc(null);
-          setError(
-            "プロフィールを読み込めませんでした。通信状況を確認して、ページを再読み込みしてください。",
-          );
-        })
-        .finally(() => {
-          if (gen !== generation.current) return;
           setLoading(false);
-        });
-    });
-  }, []);
+          return;
+        }
+
+        setLoading(true);
+        const recordConsent = pendingConsent.current;
+        pendingConsent.current = false;
+
+        // Bounded for the same reason. `loading` clears in the `finally`, which
+        // only runs if this settles, and Firestore on an unreachable backend
+        // does not settle on its own.
+        withTimeout(
+          ensureUserDoc(next, { recordConsent }),
+          LOAD_TIMEOUT_MS,
+          "プロフィールの読み込みに時間がかかりすぎています。",
+        )
+          .then((doc) => {
+            if (gen !== generation.current) return;
+            setUserDoc(doc);
+          })
+          .catch(() => {
+            if (gen !== generation.current) return;
+            setUserDoc(null);
+            // Blocked rather than merely noted: without the document we cannot
+            // tell whether they have finished onboarding, and "/" used to
+            // resolve that by sending them through it a second time. A 再試行
+            // is the honest option.
+            setBlocked("プロフィールを読み込めませんでした。");
+          })
+          .finally(() => {
+            if (gen !== generation.current) return;
+            setLoading(false);
+          });
+      });
+    } catch (e) {
+      // getFirebaseApp throws when the NEXT_PUBLIC_FIREBASE_* values are
+      // missing. Thrown from an effect it would take out the whole tree; said
+      // out loud it is a message with a cause in it.
+      console.error("[auth] could not reach Firebase Auth", e);
+      clearTimeout(deadline);
+      setBlocked("サインイン状態を確認できませんでした。");
+      setLoading(false);
+      return;
+    }
+
+    return () => {
+      clearTimeout(deadline);
+      unsubscribe();
+    };
+  }, [attempt]);
+
+  const retryAuth = useCallback(() => setAttempt((n) => n + 1), []);
 
   const signInWithGoogle = useCallback(async (agreedToTerms: boolean) => {
     setError(null);
+    setBlocked(null);
     pendingConsent.current = agreedToTerms;
     try {
       await signInWithPopup(getFirebaseAuth(), new GoogleAuthProvider());
@@ -142,11 +204,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       userDoc,
       loading,
       error,
+      blocked,
+      retryAuth,
       signInWithGoogle,
       signOut,
       applyOnboarding,
     }),
-    [user, userDoc, loading, error, signInWithGoogle, signOut, applyOnboarding],
+    [
+      user,
+      userDoc,
+      loading,
+      error,
+      blocked,
+      retryAuth,
+      signInWithGoogle,
+      signOut,
+      applyOnboarding,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

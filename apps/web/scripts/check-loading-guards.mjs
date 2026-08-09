@@ -140,6 +140,53 @@ for (const file of readdirSync(COMPONENTS, { withFileTypes: true })) {
   auditLoads(file.name, readFileSync(new URL(file.name, COMPONENTS), "utf8"));
 }
 
+// ---------------------------------------------------------------------------
+console.log("\n入口 — 全画面が待っている門にも締め切りがある");
+// ---------------------------------------------------------------------------
+
+// 画面ごとの締め切りは全部そろっていたのに、症状だけが戻ってきた。全画面が
+// RequireAuth の後ろにあり、その loading は onAuthStateChanged のコールバックの
+// 中でしか下りない。Firebase は保存済みセッションを IndexedDB から読むので、
+// ストレージが塞がれた環境ではコールバック自体が来ない。来なければ画面は自分の
+// 読み込みまで辿り着けず、締め切りを持っていても使う機会がない。
+// 門が開かない可能性は、門で見る。
+const authContext = readFileSync(
+  new URL("../lib/firebase/auth-context.tsx", import.meta.url),
+  "utf8",
+);
+
+check(
+  "セッション復元そのものに締め切りがある",
+  /setTimeout\([\s\S]{0,400}LOAD_TIMEOUT_MS\)/.test(authContext),
+  "onAuthStateChanged が呼ばれなければ loading は永久に true のまま",
+);
+
+check(
+  "締め切り切れは blocked として伝わる",
+  authContext.includes("setBlocked("),
+  "門が開かなかったことを画面が知る手段がない",
+);
+
+check(
+  "門はもう一度試せる",
+  authContext.includes("retryAuth"),
+  "再試行のない読み込み画面は再読み込みしか出口がない",
+);
+
+// 「分からない」は「サインアウト済み」ではない。取り違えると、通信が細い
+// だけのサインイン済みの学生がログイン画面に落とされる。
+for (const [label, path] of [
+  ["RequireAuth", "../components/require-auth.tsx"],
+  ["/", "../app/page.tsx"],
+]) {
+  const source = readFileSync(new URL(path, import.meta.url), "utf8");
+  check(
+    `${label} は開かなかった門を再試行つきで見せる`,
+    source.includes("blocked") && source.includes("ScreenError"),
+    "読み込み表示のまま学生のやることがない",
+  );
+}
+
 console.log(
   failures === 0 ? "\n✅ すべて通りました\n" : `\n❌ ${failures} 件失敗しました\n`,
 );
