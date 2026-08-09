@@ -30,18 +30,35 @@ type AuthValue = {
    * second loading state on every screen.
    */
   userDoc: UserDoc | null;
-  /** True until Firebase has restored (or ruled out) a persisted session. */
-  loading: boolean;
+  /**
+   * True until Firebase has restored (or ruled out) a persisted session.
+   *
+   * This is the only wait every screen must sit behind, because until it clears
+   * there is no uid and therefore nothing any screen could ask for.
+   */
+  sessionLoading: boolean;
+  /**
+   * True while `users/{uid}` is being read. Deliberately separate from
+   * `sessionLoading`: the uid is known before this finishes, so a screen that
+   * only needs the uid can already be fetching its own data alongside it. Only
+   * the screens whose decisions are made of the profile wait for this.
+   */
+  profileLoading: boolean;
   /** Set when the last sign-in attempt failed, for display to the student. */
   error: string | null;
   /**
-   * Set when the gate itself failed — the session could not be restored, or the
-   * profile behind it could not be read. Distinct from `error`, which is about
-   * a sign-in the student just attempted: this is about the app being unable to
-   * say who they are, which is what every screen is waiting on.
+   * Set when the gate itself failed — the session could not be restored, so the
+   * app cannot say who the student is. Distinct from `error`, which is about a
+   * sign-in they just attempted.
    */
   blocked: string | null;
-  /** Try the gate again. What the 再試行 button on the splash calls. */
+  /**
+   * Set when the profile read failed. Its own field rather than part of
+   * `blocked` because it stops less: a screen can show a 壁打ち without knowing
+   * the student's 学年. What it does stop is any decision made of the profile.
+   */
+  profileError: string | null;
+  /** Try the gate again — both halves of it. What every 再試行 here calls. */
   retryAuth: () => void;
   /**
    * `agreedToTerms` records the consent the login screen's checkbox gates the
@@ -100,9 +117,11 @@ function signInMessage(code: string): string {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [userDoc, setUserDoc] = useState<UserDoc | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   // Signing out right after signing in would otherwise let the slower user-doc
@@ -115,7 +134,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setBlocked(null);
-    setLoading(true);
+    setProfileError(null);
+    setSessionLoading(true);
+    setProfileLoading(true);
 
     /**
      * The deadline on the gate itself.
@@ -137,7 +158,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const deadline = setTimeout(() => {
       if (settled) return;
       setBlocked("サインイン状態を確認できませんでした。");
-      setLoading(false);
+      setSessionLoading(false);
+      setProfileLoading(false);
     }, LOAD_TIMEOUT_MS);
 
     let unsubscribe: () => void;
@@ -154,21 +176,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const gen = ++generation.current;
         setUser(next);
         setBlocked(null);
+        // The uid is known now, and the uid is all a screen needs to start
+        // asking for its own documents. Holding the gate shut until the profile
+        // arrives is what made the two reads a queue instead of a pair.
+        setSessionLoading(false);
+        mark("gate:開通 — ここから画面は自分のデータを取りに行ける");
 
         if (!next) {
           setUserDoc(null);
-          setLoading(false);
-          mark("gate:開通 (サインアウト)");
+          setProfileLoading(false);
           return;
         }
 
-        setLoading(true);
+        setProfileLoading(true);
+        setProfileError(null);
         const recordConsent = pendingConsent.current;
         pendingConsent.current = false;
 
-        // Bounded for the same reason. `loading` clears in the `finally`, which
-        // only runs if this settles, and Firestore on an unreachable backend
-        // does not settle on its own.
+        // Bounded for the same reason. `profileLoading` clears in the
+        // `finally`, which only runs if this settles, and Firestore on an
+        // unreachable backend does not settle on its own.
         mark("userdoc:users/{uid} 読み取り開始");
         withTimeout(
           ensureUserDoc(next, { recordConsent }),
@@ -183,16 +210,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .catch(() => {
             if (gen !== generation.current) return;
             setUserDoc(null);
-            // Blocked rather than merely noted: without the document we cannot
-            // tell whether they have finished onboarding, and "/" used to
-            // resolve that by sending them through it a second time. A 再試行
-            // is the honest option.
-            setBlocked("プロフィールを読み込めませんでした。");
+            // Recorded, not fatal. Without the document we cannot tell whether
+            // they have finished onboarding — "/" used to resolve that by
+            // sending them through it a second time, so that decision still
+            // waits for a 再試行. What no longer waits is a 壁打ち the student
+            // is in the middle of, which does not depend on their 学年.
+            setProfileError("プロフィールを読み込めませんでした。");
           })
           .finally(() => {
             if (gen !== generation.current) return;
-            setLoading(false);
-            mark("gate:開通 — ここで初めて画面が描かれ始める");
+            setProfileLoading(false);
+            mark("profile:確定");
           });
       });
     } catch (e) {
@@ -202,7 +230,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("[auth] could not reach Firebase Auth", e);
       clearTimeout(deadline);
       setBlocked("サインイン状態を確認できませんでした。");
-      setLoading(false);
+      setSessionLoading(false);
+      setProfileLoading(false);
       return;
     }
 
@@ -217,6 +246,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signInWithGoogle = useCallback(async (agreedToTerms: boolean) => {
     setError(null);
     setBlocked(null);
+    setProfileError(null);
     pendingConsent.current = agreedToTerms;
     try {
       await signInWithPopup(getFirebaseAuth(), new GoogleAuthProvider());
@@ -252,9 +282,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user,
       userDoc,
-      loading,
+      sessionLoading,
+      profileLoading,
       error,
       blocked,
+      profileError,
       retryAuth,
       signInWithGoogle,
       signOut,
@@ -263,9 +295,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [
       user,
       userDoc,
-      loading,
+      sessionLoading,
+      profileLoading,
       error,
       blocked,
+      profileError,
       retryAuth,
       signInWithGoogle,
       signOut,

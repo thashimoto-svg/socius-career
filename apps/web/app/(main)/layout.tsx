@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ExtractionProvider } from "@/components/extraction-provider";
 import { RequireAuth } from "@/components/require-auth";
+import { useAuth } from "@/lib/firebase/auth-context";
 import { fs, T } from "@/lib/theme";
 
 /**
@@ -25,6 +26,61 @@ const NAV = [
   { href: "/jibunshi", label: "自分史", also: [] },
 ] as const;
 
+/**
+ * The profile failed to load, and the app kept going anyway.
+ *
+ * It can: nothing in here is unusable without it — the 壁打ち still opens, the
+ * 自分史 still lists. What is missing is the student's name at the top of ホーム
+ * and the 学年 the prompts lean on, and a 壁打ち started in that state is
+ * quietly less tailored than the one they had yesterday.
+ *
+ * Quiet is the problem. The screens go on working, so nothing on them would
+ * ever say why they got a blander answer. One line does, above everything, with
+ * the button that fixes it — and it takes no room at all when there is nothing
+ * wrong, which is the usual case.
+ */
+function ProfileNotice() {
+  const { profileError, retryAuth } = useAuth();
+  if (!profileError) return null;
+
+  return (
+    <div
+      role="alert"
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        padding: "7px 14px",
+        background: T.karakuchiSoft,
+        color: T.karakuchi,
+        fontSize: fs(11),
+        lineHeight: 1.6,
+      }}
+    >
+      <span>{profileError}</span>
+      <button
+        type="button"
+        onClick={retryAuth}
+        style={{
+          flexShrink: 0,
+          padding: "3px 12px",
+          borderRadius: 999,
+          border: `1px solid ${T.karakuchi}`,
+          background: "transparent",
+          color: T.karakuchi,
+          fontSize: fs(10.5),
+          fontWeight: 700,
+          cursor: "pointer",
+        }}
+      >
+        再試行
+      </button>
+    </div>
+  );
+}
+
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
@@ -45,6 +101,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           className="flex flex-col"
           style={{ height: "var(--sc-app-height, 100dvh)", minHeight: 0 }}
         >
+          <ProfileNotice />
+
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</main>
 
           <nav

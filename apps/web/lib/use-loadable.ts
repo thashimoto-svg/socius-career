@@ -28,6 +28,58 @@ import { LOAD_TIMEOUT_MS, withTimeout } from "./with-timeout";
  * error and not a wait — it is simply nothing.
  */
 
+/**
+ * Loads started before the screen that wants them exists.
+ *
+ * A screen cannot fetch until it has mounted, and it cannot mount until the
+ * route it is on has been chosen — so anything the router needs to think about
+ * first is time the network spends idle. `warmLoadable` lets whoever is doing
+ * that thinking start the fetch anyway; the screen picks up the promise already
+ * in flight instead of opening a second one.
+ *
+ * Single use, and short-lived: a handoff between a redirect and the screen it
+ * lands on is a matter of milliseconds, and a promise kept longer than that is
+ * a cache — which is a different feature, with an invalidation problem this
+ * does not want.
+ */
+const WARM_TTL_MS = 30_000;
+
+const warmed = new Map<string, { promise: Promise<unknown>; at: number }>();
+
+function warmKey(uid: string, scope: string): string {
+  return `${uid}:${scope}`;
+}
+
+export function warmLoadable<T>(
+  uid: string | null,
+  scope: string,
+  load: (uid: string) => Promise<T>,
+): void {
+  if (!uid) return;
+  const key = warmKey(uid, scope);
+  if (warmed.has(key)) return;
+
+  mark(`warm:${scope} 先読み開始`);
+  const promise = load(uid);
+  // Nobody may ever claim this one — the student turns out to be heading
+  // somewhere else, or leaves. An unclaimed rejection is still a rejection, and
+  // an unhandled one is a console error for a request that was only ever a
+  // guess. The handler goes on a copy so the stored promise still rejects for
+  // whoever does claim it.
+  void promise.catch(() => {});
+  warmed.set(key, { promise, at: Date.now() });
+}
+
+/** Take the warmed load if there is a fresh one. Leaves nothing behind. */
+function claimWarm<T>(uid: string, scope: string): Promise<T> | null {
+  const key = warmKey(uid, scope);
+  const hit = warmed.get(key);
+  if (!hit) return null;
+  warmed.delete(key);
+  if (Date.now() - hit.at > WARM_TTL_MS) return null;
+  return hit.promise as Promise<T>;
+}
+
 export type Loadable<T> = {
   /** The loaded value, or null while loading and after a failure. */
   data: T | null;
@@ -87,15 +139,20 @@ export function useLoadable<T>(
     const scope = optsRef.current.scope ?? "";
 
     if (inflight.current?.key !== key) {
+      // A load someone started on this screen's behalf before it existed. Only
+      // ever there on the first attempt: claiming removes it, so a 再試行 after
+      // a failure asks again rather than being handed the same failure back.
+      const warm = claimWarm<T>(uid, scope);
+
       // Deliberately marked here rather than at the top of the effect: this is
-      // the moment the screen's own network work starts, and the gap between it
-      // and gate:開通 above is the waterfall — two round trips that could have
-      // been one.
-      mark(`screen:${scope} 取得開始`);
+      // the moment the screen's own network work starts. The gap between it and
+      // gate:開通 above is what the waterfall was — and when this says 先読み,
+      // the gap is what the prefetch already ate.
+      mark(`screen:${scope} ${warm ? "先読みを受け取り" : "取得開始"}`);
       inflight.current = {
         key,
         promise: withTimeout(
-          loadRef.current(uid),
+          warm ?? loadRef.current(uid),
           optsRef.current.timeoutMs ?? LOAD_TIMEOUT_MS,
           optsRef.current.message,
         ),

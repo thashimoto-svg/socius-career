@@ -6,9 +6,8 @@ import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { ScreenError } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
-import { listEpisodes } from "@/lib/firebase/episodes";
-import { listSessions } from "@/lib/firebase/sessions";
-import { formatShortDate, type Episode, type Session } from "@/lib/firebase/schema";
+import { formatShortDate } from "@/lib/firebase/schema";
+import { HOME_SCOPE, loadHomeSummary } from "@/lib/home-summary";
 import { PERIOD_SHORT, periodsFilled, TIMELINE_PERIODS } from "@/lib/jibunshi-periods";
 import { startChat } from "@/lib/new-chat";
 import { useLoadable } from "@/lib/use-loadable";
@@ -26,11 +25,6 @@ import { fs, T } from "@/lib/theme";
  * a specific conversation.
  */
 
-type Summary = {
-  episodes: Episode[];
-  latest: Session | null;
-};
-
 export default function HomePage() {
   const router = useRouter();
   const { user, userDoc } = useAuth();
@@ -39,18 +33,14 @@ export default function HomePage() {
   // just pressed, and the button is its own 再試行.
   const [startError, setStartError] = useState(false);
 
-  const loaded = useLoadable(
-    user?.uid ?? null,
-    async (uid): Promise<Summary> => {
-      const [episodes, sessions] = await Promise.all([
-        listEpisodes(uid),
-        listSessions(uid),
-      ]);
-      // listSessions is already newest-first.
-      return { episodes, latest: sessions[0] ?? null };
-    },
-    { message: "進み具合を読み込めませんでした。" },
-  );
+  // The loader lives in lib/home-summary so that "/" can start it while it is
+  // still deciding whether this is the screen the student is going to. Under
+  // the same scope, which is what lets this pick up the load already running
+  // rather than opening a second one.
+  const loaded = useLoadable(user?.uid ?? null, loadHomeSummary, {
+    message: "進み具合を読み込めませんでした。",
+    scope: HOME_SCOPE,
+  });
 
   const summary = loaded.data;
 

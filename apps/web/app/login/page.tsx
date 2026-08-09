@@ -8,17 +8,22 @@ import { AuthSplash } from "@/components/auth-splash";
 import { fs, T } from "@/lib/theme";
 
 export default function LoginPage() {
-  const { user, loading, error, signInWithGoogle } = useAuth();
+  const { user, sessionLoading, error, signInWithGoogle } = useAuth();
   const router = useRouter();
   const [agreed, setAgreed] = useState(false);
 
   // Someone who is already signed in has no business on this screen; "/" owns
   // the onboarding-vs-chat decision, so bounce there rather than guessing.
+  //
+  // The session is the whole question here. Whether their profile has loaded
+  // is not this screen's business — it used to wait for it anyway, which meant
+  // the first screen of the app held itself back for a document that belongs to
+  // someone who, on this screen, is usually not signed in at all.
   useEffect(() => {
-    if (!loading && user) router.replace("/");
-  }, [loading, user, router]);
+    if (!sessionLoading && user) router.replace("/");
+  }, [sessionLoading, user, router]);
 
-  if (loading || user) return <AuthSplash />;
+  if (sessionLoading || user) return <AuthSplash />;
 
   return (
     <div

@@ -187,6 +187,71 @@ for (const [label, path] of [
   );
 }
 
+// ---------------------------------------------------------------------------
+console.log("\n門の二枚 — セッションと プロフィール は別々に待つ");
+// ---------------------------------------------------------------------------
+
+// 門が一枚だったころ、全画面は往復二回分を直列に待っていた。uid が分かった時点で
+// 画面は自分のデータを取りに行けるのに、名前を出すためだけの users/{uid} が
+// 読み終わるまで mount すらしなかった。だから待ちを二つに割った。
+// 割ったものは、くっつけ直されやすい。
+check(
+  "セッションとプロフィールの待ちが別々に出ている",
+  authContext.includes("sessionLoading") && authContext.includes("profileLoading"),
+  "一つに戻すと、画面はまた往復二回を直列に待つ",
+);
+
+const requireAuth = readFileSync(
+  new URL("../components/require-auth.tsx", import.meta.url),
+  "utf8",
+);
+
+check(
+  "RequireAuth が既定で待つのはセッションだけ",
+  /waitForProfile = false/.test(requireAuth) &&
+    /if \(sessionLoading \|\| !user\) return <AuthSplash/.test(requireAuth),
+  "既定でプロフィールを待つと、割った意味が消える",
+);
+
+// 逆側。オンボーディングのチップは保存済みプロフィールを useState の初期値から
+// 読む。初期値は一度しか読まれないので、プロフィールが届く前に描くと、答えを
+// 変えに来た学生に既定値が出て、保存でそれが上書きされる。速さより保存が優先。
+const onboardingLayout = readFileSync(
+  new URL("../app/onboarding/layout.tsx", import.meta.url),
+  "utf8",
+);
+
+check(
+  "オンボーディングはプロフィールを待ってから描く",
+  onboardingLayout.includes("waitForProfile"),
+  "前回の答えが既定値に置き換わり、保存で消える",
+);
+
+// プロフィールが読めなくても画面は動く。動くからこそ、黙って劣化する。
+const mainLayout = readFileSync(
+  new URL("../app/(main)/layout.tsx", import.meta.url),
+  "utf8",
+);
+
+check(
+  "プロフィールの失敗はタブの中でも見える",
+  mainLayout.includes("profileError") && mainLayout.includes("retryAuth"),
+  "名前もプロンプトの学年も欠けたまま、理由がどこにも出ない",
+);
+
+// 先読みは受け渡しであって、キャッシュではない。消さずに残すと、再試行が
+// さっき失敗したのと同じ promise を受け取って、同じ失敗を返す。
+const useLoadable = readFileSync(
+  new URL("../lib/use-loadable.ts", import.meta.url),
+  "utf8",
+);
+
+check(
+  "先読みは一度きり(受け取ったら消える)",
+  /warmed\.delete\(key\)/.test(useLoadable),
+  "再試行が同じ結果を受け取り、押しても何も変わらない",
+);
+
 console.log(
   failures === 0 ? "\n✅ すべて通りました\n" : `\n❌ ${failures} 件失敗しました\n`,
 );
