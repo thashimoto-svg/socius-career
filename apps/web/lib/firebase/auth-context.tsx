@@ -55,6 +55,48 @@ type AuthValue = {
 
 const AuthContext = createContext<AuthValue | null>(null);
 
+/**
+ * What to tell the student when sign-in fails.
+ *
+ * Split by whose problem it is. 「時間をおいてもう一度お試しください」 is the right
+ * sentence for a flaky connection and a lie for a misconfigured project: it
+ * asks someone to keep pressing a button that cannot work, and it hides the one
+ * fact that would fix it from the only person reading the screen. An error
+ * nobody can act on should at least name itself.
+ */
+function signInMessage(code: string): string {
+  switch (code) {
+    // The deployment is being served from a hostname Firebase Auth was never
+    // told about — a preview URL, a new Codespace, a port that drifted. The
+    // hostname is in the message because it is the exact string that has to be
+    // pasted into 承認済みドメイン.
+    case "auth/unauthorized-domain": {
+      const host =
+        typeof window === "undefined" ? "(不明)" : window.location.hostname;
+      return (
+        `このドメインからはサインインできません(開発環境設定の問題です)。\n` +
+        `Firebase Console → Authentication → Settings → 承認済みドメイン に ` +
+        `${host} を追加してください。`
+      );
+    }
+
+    // The provider is switched off in the console. Same class: nothing the
+    // student does will change it.
+    case "auth/operation-not-allowed":
+      return "Google サインインが有効になっていません(開発環境設定の問題です)。";
+
+    case "auth/popup-blocked":
+      return "ポップアップがブロックされました。ブラウザの設定を確認してください。";
+
+    // This one really is worth another go.
+    case "auth/network-request-failed":
+      return "通信に失敗しました。通信状況を確認して、もう一度お試しください。";
+
+    default:
+      return "サインインできませんでした。時間をおいてもう一度お試しください。";
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [userDoc, setUserDoc] = useState<UserDoc | null>(null);
@@ -188,11 +230,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ) {
         return;
       }
-      setError(
-        code === "auth/popup-blocked"
-          ? "ポップアップがブロックされました。ブラウザの設定を確認してください。"
-          : "サインインできませんでした。時間をおいてもう一度お試しください。",
-      );
+      // The code as well as the sentence: a configuration error is read by
+      // whoever is fixing the configuration, and they need the string Firebase
+      // actually returned, not our paraphrase of it.
+      console.error(`[auth] sign-in failed (${code || "unknown"})`, e);
+      setError(signInMessage(code));
     }
   }, []);
 

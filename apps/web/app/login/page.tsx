@@ -117,6 +117,12 @@ export default function LoginPage() {
             color: T.karakuchi,
             fontSize: fs(12),
             lineHeight: 1.7,
+            // The configuration errors are two or three lines and carry a
+            // hostname that has to be readable to be pasted, so the newlines
+            // they are written with have to survive, and a domain longer than
+            // the panel has to wrap rather than push it sideways.
+            whiteSpace: "pre-line",
+            overflowWrap: "anywhere",
           }}
         >
           {error}
