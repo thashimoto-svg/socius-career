@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Shippori_Mincho, Zen_Kaku_Gothic_New } from "next/font/google";
 import { AuthProvider } from "@/lib/firebase/auth-context";
+import { Preconnect } from "@/components/preconnect";
 import { SettingsProvider } from "@/components/settings-provider";
 import { ViewportHeight } from "@/components/viewport-height";
 import "./globals.css";
@@ -50,6 +51,9 @@ export default function RootLayout({
       className={`${zenKaku.variable} ${shippori.variable} h-full antialiased`}
     >
       <body className="min-h-full">
+        {/* Renders nothing. Hoisted into <head>, so the handshakes with
+            Firebase's hosts start while the SDK is still downloading. */}
+        <Preconnect />
         <ViewportHeight />
         {/*
           Mobile-first column; centered with a subtle frame on wider screens.
