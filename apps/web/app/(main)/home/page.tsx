@@ -67,7 +67,10 @@ export default function HomePage() {
     <>
       <AppHeader title="ホーム" newChatMode={summary?.latest?.mode ?? "counselor"} />
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 16px" }}>
+      <div
+        className="sc-readable"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 16px" }}
+      >
         <p style={{ fontSize: fs(11.5), color: T.sub, lineHeight: 1.9, margin: "0 0 14px" }}>
           {userDoc?.displayName ? `${userDoc.displayName}さんの` : ""}
           自分史は、話した分だけ埋まります。

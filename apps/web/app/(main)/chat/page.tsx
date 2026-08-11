@@ -7,6 +7,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
+import { useBeforeLeave } from "@/components/leave-guard";
 import { ScreenError } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
@@ -244,6 +245,17 @@ function ChatScreen() {
     [startExtraction],
   );
 
+  /**
+   * The same handoff, for whoever navigates away from outside this screen.
+   *
+   * AppHeader's ＋ and its drawer get it as a prop, because they are rendered
+   * from here. The desktop sidebar is not — it lives in the layout, and without
+   * this, switching 壁打ち from it would leave the conversation behind with
+   * nothing ever extracted from it.
+   */
+  const handOffOnLeave = useCallback(() => handOff(MIN_NEW_ON_LEAVE), [handOff]);
+  useBeforeLeave(handOffOnLeave);
+
   // 「最後の抽出から6メッセージ以上増えた状態でアプリ復帰時」. Backgrounding the app
   // is the other way a 壁打ち ends — students close the tab mid-thought far more
   // often than they tidily switch threads.
@@ -328,6 +340,9 @@ function ChatScreen() {
           padding: "14px 14px 4px",
         }}
       >
+        {/* The scroller is the full width of the column so the scrollbar stays
+            at the window's edge; only what is read is narrowed. */}
+        <div className="sc-readable">
         {/*
           「モードで変わるのは言い方だけ…」 used to sit here. It was an explanation
           of an implementation decision, printed above every conversation
@@ -396,7 +411,8 @@ function ChatScreen() {
           </div>
         )}
 
-        <div ref={bottomRef} />
+          <div ref={bottomRef} />
+        </div>
       </div>
 
       {/* composer */}
@@ -407,7 +423,10 @@ function ChatScreen() {
           background: T.paper,
         }}
       >
+        {/* Same column as the transcript, so the box lines up under the words
+            it is for rather than under the whole window. */}
         <form
+          className="sc-readable"
           onSubmit={(e) => {
             e.preventDefault();
             void send();

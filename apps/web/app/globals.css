@@ -111,6 +111,31 @@ body {
   overscroll-behavior-y: none;
 }
 
+/*
+  The readable column.
+
+  Lifting the 480px shell cap for the desktop screens gives the content the
+  whole window, and the whole window is the wrong amount: a line of Japanese
+  set 1400px wide is measured in how far the eye has to travel back to find the
+  start of the next one, and it loses the line about half the time. So the
+  shell grows and the text does not — 720px is roughly 45 Japanese characters
+  at this size, which is inside the range prose has been set at for centuries.
+
+  A class rather than a token because it is a media query, and media queries
+  are the one thing the inline styles everything else in this app is built from
+  cannot express.
+*/
+.sc-readable {
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .sc-readable {
+    max-width: 720px;
+    margin-inline: auto;
+  }
+}
+
 /* Shippori Mincho — used for display headings and student's own words. */
 .sc-display {
   font-family: var(--font-sc-display), "Shippori Mincho", serif;

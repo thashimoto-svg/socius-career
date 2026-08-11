@@ -103,17 +103,26 @@ export function AppHeader({
           background: T.paper,
         }}
       >
+        {/*
+          Gone from 768px up. ☰ opens a panel listing past 壁打ち on top of the
+          screen you are reading; at that width the same list is already beside
+          it, permanently, and a button that covers the page with something the
+          page is already showing is worse than no button.
+
+          `display` lives in the class rather than the style attribute so that
+          `md:hidden` can win — an inline display would outrank it.
+        */}
         <button
           type="button"
           onClick={() => setDrawerOpen(true)}
           aria-label="壁打ちの一覧を開く"
           aria-expanded={drawerOpen}
+          className="flex md:hidden"
           style={{
             flexShrink: 0,
             border: "none",
             background: "none",
             padding: 2,
-            display: "flex",
             alignItems: "center",
             cursor: "pointer",
           }}

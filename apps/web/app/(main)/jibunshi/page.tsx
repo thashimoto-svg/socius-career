@@ -88,7 +88,10 @@ export default function JibunshiPage() {
     <>
       <AppHeader title="自分史" />
       {/* The shell no longer scrolls, so every screen owns the panel that does. */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
+      <div
+        className="sc-readable"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}
+      >
       <p style={{ fontSize: fs(11.5), color: T.sub, margin: "0 0 16px" }}>
         ここにある言葉は、すべてあなた自身が話したことです。
       </p>

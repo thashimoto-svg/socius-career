@@ -24,7 +24,10 @@ export default function SettingsPage() {
     <>
       <AppHeader title="設定" />
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 16px" }}>
+      <div
+        className="sc-readable"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 16px" }}
+      >
         <Section title="文字サイズ">
           <Choices
             options={FONT_SIZES}

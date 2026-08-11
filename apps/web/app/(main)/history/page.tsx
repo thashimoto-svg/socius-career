@@ -26,7 +26,10 @@ export default function HistoryPage() {
     <>
       <AppHeader title="壁打ちの記録" />
       {/* The shell no longer scrolls, so every screen owns the panel that does. */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}>
+      <div
+        className="sc-readable"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}
+      >
 
       {error && <ScreenError message={error} onRetry={retry} />}
 

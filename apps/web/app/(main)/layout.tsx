@@ -1,8 +1,11 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { DesktopSidebar, DesktopSidebarFallback } from "@/components/DesktopSidebar";
 import { ExtractionProvider } from "@/components/extraction-provider";
+import { LeaveGuardProvider } from "@/components/leave-guard";
 import { RequireAuth } from "@/components/require-auth";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { fs, T } from "@/lib/theme";
@@ -89,6 +92,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       {/* Above the pages: extraction is triggered by leaving a 壁打ち, so the
           thing that runs it must outlive the screen that asks for it. */}
       <ExtractionProvider>
+        {/* Also above the pages, and for the same reason turned around: the
+            sidebar navigates away from a 壁打ち it is not inside, so the screen
+            being left has to have somewhere to leave its handoff. */}
+        <LeaveGuardProvider>
         {/*
           Pinned to exactly the visible height rather than allowed to grow.
           Everything that has to stay on screen — the tab bar, and the composer
@@ -96,19 +103,41 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           scrolls, so nothing can push them past the bottom edge. When the
           keyboard opens, --sc-app-height shrinks and the whole shell shrinks
           with it instead of sliding underneath.
+
+          A row from 768px up, where the sidebar is the first column. Below it
+          the sidebar is not rendered at all and this is the column it always
+          was.
         */}
         <div
-          className="flex flex-col"
+          className="flex flex-col md:flex-row"
           style={{ height: "var(--sc-app-height, 100dvh)", minHeight: 0 }}
         >
+          {/*
+            Suspended because it reads `?s=` to know which 壁打ち is open, and a
+            statically prerendered route has no URL to read at build time — an
+            unsuspended useSearchParams here fails the production build. The
+            fallback is the same empty column at the same width, so hydration
+            fills it in rather than resizing the page.
+          */}
+          <Suspense fallback={<DesktopSidebarFallback />}>
+            <DesktopSidebar />
+          </Suspense>
+
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <ProfileNotice />
 
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</main>
 
+          {/*
+            Gone from 768px up. Its three destinations are in the sidebar, and
+            a bar of tabs across the bottom of a desktop window is a phone
+            control that followed the code onto a screen that has no use for
+            it — the sidebar shows the same three without covering anything.
+          */}
           <nav
+            className="flex md:hidden"
             style={{
               flexShrink: 0,
-              display: "flex",
               borderTop: `1px solid ${T.line}`,
               background: T.paper,
               // Keeps the labels clear of the home indicator rather than
@@ -139,7 +168,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               );
             })}
           </nav>
+          </div>
         </div>
+        </LeaveGuardProvider>
       </ExtractionProvider>
     </RequireAuth>
   );
