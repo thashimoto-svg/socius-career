@@ -5,12 +5,32 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { AuthSplash } from "@/components/auth-splash";
+import { OpenInBrowserHint } from "@/components/open-in-browser-hint";
 import { fs, T } from "@/lib/theme";
 
 export default function LoginPage() {
   const { user, sessionLoading, error, signInWithGoogle } = useAuth();
   const router = useRouter();
   const [agreed, setAgreed] = useState(false);
+  // The redirect flow navigates the whole document away, and the browser takes
+  // a moment to do it. Without this the screen sits there looking untouched
+  // after the tap, which reads as a button that did nothing — the exact
+  // impression this whole change exists to remove.
+  const [busy, setBusy] = useState(false);
+
+  const signIn = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await signInWithGoogle(agreed);
+    } finally {
+      // Matters on the popup path and on a redirect that failed to start —
+      // both leave the student on this screen with a button that has to work
+      // again. On a redirect that did start, the document is already unloading
+      // and whatever this sets is about to stop existing.
+      setBusy(false);
+    }
+  };
 
   // Someone who is already signed in has no business on this screen; "/" owns
   // the onboarding-vs-chat decision, so bounce there rather than guessing.
@@ -95,8 +115,8 @@ export default function LoginPage() {
 
       <button
         type="button"
-        onClick={() => signInWithGoogle(agreed)}
-        disabled={!agreed}
+        onClick={() => void signIn()}
+        disabled={!agreed || busy}
         style={{
           padding: "13px 0",
           borderRadius: 12,
@@ -105,10 +125,11 @@ export default function LoginPage() {
           color: agreed ? T.onAccent : T.sub,
           fontSize: fs(14),
           fontWeight: 700,
-          cursor: agreed ? "pointer" : "not-allowed",
+          opacity: busy ? 0.6 : 1,
+          cursor: agreed && !busy ? "pointer" : "not-allowed",
         }}
       >
-        Google で続ける
+        {busy ? "サインインしています…" : "Google で続ける"}
       </button>
 
       {error && (
@@ -133,6 +154,8 @@ export default function LoginPage() {
           {error}
         </div>
       )}
+
+      <OpenInBrowserHint />
 
       <div
         style={{

@@ -10,12 +10,16 @@ import {
   useState,
 } from "react";
 import {
+  getRedirectResult,
   GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithRedirect,
   signOut as firebaseSignOut,
+  type Auth,
   type User,
 } from "firebase/auth";
+import { isInAppBrowser } from "../in-app-browser";
 import { mark } from "../perf";
 import { LOAD_TIMEOUT_MS, withTimeout } from "../with-timeout";
 import { getFirebaseAuth } from "./client";
@@ -105,6 +109,20 @@ function signInMessage(code: string): string {
     case "auth/popup-blocked":
       return "ポップアップがブロックされました。ブラウザの設定を確認してください。";
 
+    // The two ways an embedded browser refuses, after the redirect fallback has
+    // already been tried. Both point at the same fix, and it is the one the
+    // panel under the button offers: leave the app's browser.
+    //
+    // `web-storage-unsupported` is the common one — LINE and Instagram hand the
+    // page a WebView with third-party storage switched off, and Firebase Auth
+    // cannot complete either flow without somewhere to keep the session.
+    case "auth/web-storage-unsupported":
+    case "auth/operation-not-supported-in-this-environment":
+      return (
+        "このアプリ内ブラウザではサインインできません。\n" +
+        "右上のメニューから Safari / Chrome で開いてから、もう一度お試しください。"
+      );
+
     // This one really is worth another go.
     case "auth/network-request-failed":
       return "通信に失敗しました。通信状況を確認して、もう一度お試しください。";
@@ -112,6 +130,78 @@ function signInMessage(code: string): string {
     default:
       return "サインインできませんでした。時間をおいてもう一度お試しください。";
   }
+}
+
+/**
+ * Where consent waits while the browser is somewhere else.
+ *
+ * The popup flow keeps the checkbox's answer in a ref, because the page that
+ * asked is still the page that hears the result. The redirect flow leaves: the
+ * document is torn down, Google is visited, and a *new* page load is what
+ * eventually sees the signed-in student. A ref cannot survive that, and without
+ * it `ensureUserDoc` would record a first sign-in with no consent stamped
+ * against it — the one fact the checkbox exists to produce.
+ *
+ * sessionStorage rather than localStorage: it belongs to this tab and this
+ * attempt. A stale flag left in localStorage would stamp consent onto some
+ * later sign-in that never showed the checkbox at all.
+ */
+const CONSENT_KEY = "sc:pending-consent";
+
+/**
+ * Read-and-clear. Storage is wrapped because the browsers this whole feature
+ * exists for are exactly the ones that throw on touching it.
+ */
+function takePersistedConsent(): boolean {
+  try {
+    const found = window.sessionStorage.getItem(CONSENT_KEY);
+    if (found) window.sessionStorage.removeItem(CONSENT_KEY);
+    return found === "1";
+  } catch {
+    return false;
+  }
+}
+
+function persistConsent(agreed: boolean): void {
+  try {
+    if (agreed) window.sessionStorage.setItem(CONSENT_KEY, "1");
+  } catch {
+    // A WebView with storage blocked. The sign-in is about to fail for the
+    // same reason, and it will say so with a message that has a fix in it.
+  }
+}
+
+/**
+ * Which sign-in flow this browser can actually complete.
+ *
+ * Popup is the better experience where it works — the student stays on the
+ * page, and a cancelled popup is a cancelled sign-in rather than a full page
+ * load back to the start. It just does not work in an embedded browser, which
+ * is where most of these students are.
+ */
+function shouldUseRedirect(): boolean {
+  return isInAppBrowser();
+}
+
+/**
+ * Popup failures worth re-attempting as a redirect.
+ *
+ * Deliberately short. `popup-closed-by-user` is not here — the student closed
+ * it, and answering that by navigating the whole page to Google is the app
+ * overruling them. Neither is `cancelled-popup-request`, which means a second
+ * popup was requested while one was already open: there is still a live attempt,
+ * and a redirect would throw it away.
+ *
+ * What is here is the two shapes of "this browser will not do popups", which is
+ * the case the detection above missed — an unlisted WebView, or a browser with
+ * popups switched off. Falling back costs the student one page load instead of
+ * an error they cannot act on.
+ */
+function popupFailureIsRecoverable(code: string): boolean {
+  return (
+    code === "auth/popup-blocked" ||
+    code === "auth/operation-not-supported-in-this-environment"
+  );
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -167,6 +257,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Firebase reads the persisted session from IndexedDB asynchronously, so
       // the first callback is what tells us whether anyone is actually signed in.
       const auth = getFirebaseAuth();
+
+      // Before subscribing, not after.
+      //
+      // On the way back from a redirect sign-in, Firebase resolves the result
+      // during its own initialisation and *then* fires the first
+      // onAuthStateChanged with the new user. If the consent flag were restored
+      // in a `.then()` the callback would have already run and already called
+      // ensureUserDoc without it. Reading it synchronously here means it is in
+      // place whichever of the two lands first.
+      //
+      // It is also harmless on an ordinary page load: nothing wrote the key, so
+      // this reads nothing and leaves the ref alone.
+      if (takePersistedConsent()) pendingConsent.current = true;
+
+      // The redirect's own outcome. `onAuthStateChanged` reports the *session*
+      // and will fire with the signed-in student on its own — what it cannot
+      // report is a redirect that came back having failed, because that ends
+      // with no session and looks exactly like never having tried. This is the
+      // only place that error exists.
+      //
+      // Not awaited and not part of the gate: a null result is the normal case
+      // (no redirect was in flight), and the deadline below already covers the
+      // session read that every screen actually waits on.
+      void getRedirectResult(auth)
+        .then((result) => {
+          if (result) mark("auth:リダイレクト帰還 — サインイン成功");
+        })
+        .catch((e: unknown) => {
+          pendingConsent.current = false;
+          const code = (e as { code?: string }).code ?? "";
+          console.error(`[auth] redirect sign-in failed (${code || "unknown"})`, e);
+          setError(signInMessage(code));
+        });
+
       mark("auth:onAuthStateChanged 購読");
       unsubscribe = onAuthStateChanged(auth, (next) => {
         settled = true;
@@ -243,30 +367,82 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const retryAuth = useCallback(() => setAttempt((n) => n + 1), []);
 
-  const signInWithGoogle = useCallback(async (agreedToTerms: boolean) => {
-    setError(null);
-    setBlocked(null);
-    setProfileError(null);
-    pendingConsent.current = agreedToTerms;
-    try {
-      await signInWithPopup(getFirebaseAuth(), new GoogleAuthProvider());
-    } catch (e) {
-      pendingConsent.current = false;
-      const code = (e as { code?: string }).code ?? "";
-      // Closing the popup is a normal thing to do, not an error worth showing.
-      if (
-        code === "auth/popup-closed-by-user" ||
-        code === "auth/cancelled-popup-request"
-      ) {
+  /**
+   * Leave for Google and come back signed in.
+   *
+   * Consent goes to sessionStorage first, because this call does not return —
+   * it navigates the document away, and the ref holding the checkbox's answer
+   * dies with it. The effect above picks the flag back up on the way in.
+   */
+  const startRedirect = useCallback(
+    async (auth: Auth, agreedToTerms: boolean) => {
+      persistConsent(agreedToTerms);
+      try {
+        await signInWithRedirect(auth, new GoogleAuthProvider());
+      } catch (e) {
+        // Thrown before the navigation happened, so the flag would otherwise
+        // sit there waiting for a page load that never comes.
+        takePersistedConsent();
+        pendingConsent.current = false;
+        const code = (e as { code?: string }).code ?? "";
+        console.error(`[auth] redirect sign-in could not start (${code || "unknown"})`, e);
+        setError(signInMessage(code));
+      }
+    },
+    [],
+  );
+
+  const signInWithGoogle = useCallback(
+    async (agreedToTerms: boolean) => {
+      setError(null);
+      setBlocked(null);
+      setProfileError(null);
+      pendingConsent.current = agreedToTerms;
+
+      const auth = getFirebaseAuth();
+
+      // LINE and Instagram hand the page a WebView, and a WebView has no window
+      // that can post a popup's result back. Redirect is not a fallback there —
+      // it is the only flow that can finish, so it is taken first rather than
+      // after a failure the student would have watched do nothing.
+      if (shouldUseRedirect()) {
+        await startRedirect(auth, agreedToTerms);
         return;
       }
-      // The code as well as the sentence: a configuration error is read by
-      // whoever is fixing the configuration, and they need the string Firebase
-      // actually returned, not our paraphrase of it.
-      console.error(`[auth] sign-in failed (${code || "unknown"})`, e);
-      setError(signInMessage(code));
-    }
-  }, []);
+
+      try {
+        await signInWithPopup(auth, new GoogleAuthProvider());
+      } catch (e) {
+        const code = (e as { code?: string }).code ?? "";
+
+        // Closing the popup is a normal thing to do, not an error worth showing.
+        if (
+          code === "auth/popup-closed-by-user" ||
+          code === "auth/cancelled-popup-request"
+        ) {
+          pendingConsent.current = false;
+          return;
+        }
+
+        // An embedded browser the token list above does not know about, or a
+        // browser with popups turned off. Same answer either way, and the
+        // student never has to be told which.
+        if (popupFailureIsRecoverable(code)) {
+          console.warn(`[auth] popup unavailable (${code}); retrying as redirect`);
+          await startRedirect(auth, agreedToTerms);
+          return;
+        }
+
+        pendingConsent.current = false;
+        // The code as well as the sentence: a configuration error is read by
+        // whoever is fixing the configuration, and they need the string Firebase
+        // actually returned, not our paraphrase of it.
+        console.error(`[auth] sign-in failed (${code || "unknown"})`, e);
+        setError(signInMessage(code));
+      }
+    },
+    [startRedirect],
+  );
 
   const signOut = useCallback(async () => {
     await firebaseSignOut(getFirebaseAuth());
