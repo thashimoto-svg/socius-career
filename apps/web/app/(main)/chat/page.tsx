@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { defaultTheme, titleFromFirstMessage } from "@socius/prompts";
+import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
 import { AuthSplash } from "@/components/auth-splash";
@@ -10,6 +11,7 @@ import { useExtraction } from "@/components/extraction-provider";
 import { useBeforeLeave } from "@/components/leave-guard";
 import { ScreenError } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
+import { AD_INTERVAL, adSlotFollows } from "@/lib/ads";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
 import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
 import { openChat, appendMessage, updateSessionMeta } from "@/lib/firebase/sessions";
@@ -349,10 +351,21 @@ function ChatScreen() {
           forever, and it is gone (MTG 7/30). If the two tones need a note to
           tell them apart, the note is not the thing to fix.
         */}
-        {messages.map((m) => (
-          <Bubble key={m.id} who={m.role} mode={m.mode ?? mode}>
-            {m.text}
-          </Bubble>
+        {messages.map((m, i) => (
+          // Fragment rather than a wrapper, so the bubbles stay siblings and
+          // nothing about the transcript's layout depends on whether a slot
+          // happens to fall here.
+          <Fragment key={m.id}>
+            <Bubble who={m.role} mode={m.mode ?? mode}>
+              {m.text}
+            </Bubble>
+            {/* Every AD_INTERVAL messages, and never under the last one —
+                see adSlotFollows. The index keeps successive slots from
+                being the same card three times down one conversation. */}
+            {adSlotFollows(i, messages.length) && (
+              <AdSlot index={Math.floor(i / AD_INTERVAL)} />
+            )}
+          </Fragment>
         ))}
 
         {thinking && (

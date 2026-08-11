@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
 import { ScreenError } from "@/components/screen-state";
 import { useAuth } from "@/lib/firebase/auth-context";
@@ -201,6 +202,11 @@ export default function HomePage() {
             前回の続きから({summary.latest.title})
           </Link>
         )}
+
+        {/* Below everything the student came here to do. ホーム is short and
+            ends in a decision — 壁打ちを始める — and anything between them and
+            that button is in the way of it. */}
+        <AdSlot />
       </div>
     </>
   );
