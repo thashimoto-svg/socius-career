@@ -152,14 +152,21 @@ export function AppHeader({
 
         {extra}
 
+        {/*
+          Gone from 768px up, like ☰ above it. 設定 is a gear in the corner here
+          only because the phone's bottom bar has exactly three slots and this
+          is not one of the three; the sidebar has no such scarcity and lists it
+          as a nav item. Two identical controls on one screen is a worse answer
+          than either of them alone.
+        */}
         <Link
           href="/settings"
           aria-label="設定"
+          className="flex md:hidden"
           style={{
             flexShrink: 0,
             width: 28,
             height: 28,
-            display: "flex",
             alignItems: "center",
             justifyContent: "center",
             color: T.sub,

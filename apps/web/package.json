@@ -14,7 +14,8 @@
     "check:gemini": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-gemini-guards.mjs",
     "simulate:chat": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/simulate-long-conversation.mjs",
     "measure:cache": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/measure-cache-prefix.mjs",
-    "measure:cost": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/measure-session-cost.mjs"
+    "measure:cost": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/measure-session-cost.mjs",
+    "check:rules": "firebase emulators:exec --config ../../firebase.json --only firestore --project socius-rules-check \"node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-firestore-rules.mjs\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
@@ -26,10 +27,12 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "firebase-tools": "^15.26.0",
     "prettier": "^3.9.5",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "tailwindcss": "^4",

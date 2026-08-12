@@ -18,10 +18,13 @@ import { fs, T } from "@/lib/theme";
  * something of ours rather than a dead rectangle.
  *
  * ────────────────────────────────────────────────────────────────────────────
- * NOTE FOR THE TEAM: the notices below are copy, and copy nobody has signed
- * off. They name things the app does not do yet. Rewrite or cut them before
- * the beta goes out — an announcement is a promise, and these were written to
- * fill a slot, not to be kept.
+ * The notices below are signed off for the β, and they are deliberately about
+ * what the app already does rather than what it might. That is the property to
+ * preserve when editing: an announcement is a promise, and a slot that has to
+ * be filled is a bad reason to make one.
+ *
+ * 機能予告 is planned to replace them once the copy is written with Miyuuu. It
+ * is a change to NOTICES and nothing else.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
