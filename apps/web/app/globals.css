@@ -7,6 +7,11 @@
      anywhere the API is missing. */
   --sc-app-height: 100dvh;
 
+  /* How far down the screen the visible strip starts — nonzero only on iOS,
+     and only while the keyboard has the visual viewport panned down. Declared
+     here so the first paint has a value rather than falling back mid-layout. */
+  --sc-viewport-offset: 0px;
+
   /* 文字サイズ. Set on <html> by components/settings-provider.tsx; every
      inline font size is a calc() against it (see fs() in lib/theme.ts). */
   --sc-font-scale: 1;
@@ -133,6 +138,29 @@ body {
   .sc-readable {
     max-width: 720px;
     margin-inline: auto;
+  }
+}
+
+/*
+  The tabs go behind the keyboard while the student is typing.
+
+  Pinning the shell to the visual viewport already keeps everything on screen,
+  but "on screen" put the tab bar between the composer and the keyboard — a row
+  of navigation wedged under the box you are writing in, eating 46px of the
+  ~300px the keyboard left. Nobody switches tabs mid-sentence. It comes back
+  the moment the field loses focus.
+
+  Focus rather than a measured keyboard height, because there is no reliable
+  measurement: iOS pans and Android resizes, and the one thing that means the
+  keyboard is up on both is that a text field on a phone has focus. `input:`
+  specifically — tapping 送信 moves focus to the button and closes the keyboard,
+  and a bare `:focus` would leave the tabs hidden after it.
+
+  Phones only. From 768px up there is no tab bar and no on-screen keyboard.
+*/
+@media (max-width: 767px) {
+  body:has(.sc-composer input:focus) .sc-tabs {
+    display: none;
   }
 }
 

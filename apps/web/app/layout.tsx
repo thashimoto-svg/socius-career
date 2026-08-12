@@ -39,6 +39,13 @@ export const viewport: Viewport = {
   // also what makes env(safe-area-inset-*) report anything other than zero.
   // The header and the tab bar pad themselves back out of those areas.
   viewportFit: "cover",
+  // Android Chrome shrinks the layout viewport when the keyboard opens instead
+  // of leaving the page at full height underneath it, which makes the keyboard
+  // an ordinary resize: `100dvh` is correct again, the visual viewport is never
+  // panned, and --sc-viewport-offset stays 0 there. iOS ignores this and is
+  // handled by the offset — so the two platforms end up at the same layout by
+  // two different routes rather than one hack applied to both.
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({

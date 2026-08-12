@@ -176,6 +176,23 @@ function ChatScreen() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, thinking, streaming]);
 
+  // The keyboard opening takes about half the transcript away, and what it
+  // takes is the bottom half — the last thing the AI asked. The shell resizing
+  // does not move the scroller, so without this the student taps the box and
+  // the question they were answering scrolls out of sight. Not smooth: the
+  // keyboard is already animating, and a second animation on top of it reads
+  // as the page lagging.
+  useEffect(() => {
+    const visual = window.visualViewport;
+    if (!visual) return;
+    const stayAtBottom = () => {
+      if (!document.activeElement?.closest(".sc-composer")) return;
+      bottomRef.current?.scrollIntoView({ block: "end" });
+    };
+    visual.addEventListener("resize", stayAtBottom);
+    return () => visual.removeEventListener("resize", stayAtBottom);
+  }, []);
+
   const send = async () => {
     const text = draft.trim();
     if (!text || !user || !session || thinking) return;
@@ -437,9 +454,12 @@ function ChatScreen() {
         }}
       >
         {/* Same column as the transcript, so the box lines up under the words
-            it is for rather than under the whole window. */}
+            it is for rather than under the whole window.
+
+            sc-composer is what globals.css watches to know the keyboard is up:
+            while the field inside here has focus, the tab bar is not drawn. */}
         <form
-          className="sc-readable"
+          className="sc-composer sc-readable"
           onSubmit={(e) => {
             e.preventDefault();
             void send();
