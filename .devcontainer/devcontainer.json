@@ -1,0 +1,33 @@
+{
+  "name": "socius-career",
+
+  // image は意図的に指定していない。Codespaces 既定の universal イメージ
+  // （Ubuntu 24.04 / Node 24 / nvm）を今までどおり使うため。ここでタグを固定すると
+  // 現在の環境と食い違ってビルドツールが入れ替わる。
+
+  // 作成時に一度。再起動では走らない。
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  // 再起動のたびに走る。claude / firebase が消える問題の実際の対策はこちら。
+  // 入っていれば何もしないので、起動が遅くなることはない。
+  "postStartCommand": "bash .devcontainer/setup.sh",
+
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "web (Next.js)",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "dbaeumer.vscode-eslint",
+        "bradlc.vscode-tailwindcss",
+        "toba.vsfire"
+      ]
+    }
+  }
+}
