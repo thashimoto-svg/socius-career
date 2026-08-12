@@ -7,6 +7,8 @@
  * in as many ways as necessary not to improve them on the way.
  */
 
+import type { PromptBlock } from "../cache";
+
 /**
  * The tag vocabulary. Closed on purpose: 自分史 cards are meant to be scannable
  * at a glance, which stops working the moment every card invents its own label.
@@ -68,6 +70,29 @@ export const EXTRACTION_SYSTEM_PROMPT = `あなたは対話ログから、就活
    ${EPISODE_PERIODS.join(" / ")}
    学生が「高校2年のとき」「3年の春」のように語っていればそれに従う。
    語られていなければ「不明」を選ぶ。学年や入学年から逆算して推測しない。`;
+
+/**
+ * The extraction system prompt, as a cacheable block.
+ *
+ * One block, not two: unlike the 壁打ち prompt there is nothing per-student in
+ * here at all — every extraction in the product sends these exact bytes, so
+ * there is no line to split at.
+ *
+ * The marker looks like it is caching 662 tokens, which is under the floor and
+ * would cache nothing. It is not: the render order is **tools → system →
+ * messages**, so a breakpoint on the last system block stores the tool schemas
+ * with it, and the two schemas are 1,122 tokens on their own. The real prefix
+ * is 1,784. Which is also the warning — moving the `tools` array off this
+ * request, or trimming the schemas, would drop the prefix under the floor and
+ * silently switch this off.
+ */
+export const EXTRACTION_SYSTEM_BLOCKS: PromptBlock[] = [
+  {
+    type: "text",
+    text: EXTRACTION_SYSTEM_PROMPT,
+    cache_control: { type: "ephemeral" },
+  },
+];
 
 /** One line of the transcript as the extractor sees it. */
 export type TranscriptLine = { role: "user" | "ai"; text: string };

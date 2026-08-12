@@ -103,20 +103,27 @@ const rally = (i) => [
 const long = Array.from({ length: 30 }, (_, i) => rally(i + 1)).flat();
 
 const windowed = historyWindow(long);
-eq("30往復 → 直近12往復ぶんの24件に絞られる", windowed.length, HISTORY_RALLIES * 2);
+eq(
+  `30往復 → 直近${HISTORY_RALLIES}往復ぶんの${HISTORY_RALLIES * 2}件に絞られる`,
+  windowed.length,
+  HISTORY_RALLIES * 2,
+);
 check(
   "最新の発言は必ず残る",
   windowed.at(-1).text === long.at(-1).text,
   `window tail = ${windowed.at(-1)?.text.slice(0, 20)}`,
 );
+// 30往復あって窓が N なら、最初に残るのは 30 - N + 1 番目の往復。
+const firstKept = 30 - HISTORY_RALLIES + 1;
 check(
   "落ちるのは古い側",
-  windowed[0].text.includes("19") && !windowed.some((m) => m.text.includes("発言 1。")),
+  windowed[0].text.includes(`発言 ${firstKept}。`) &&
+    !windowed.some((m) => m.text.includes("発言 1。")),
   `window head = ${windowed[0].text.slice(0, 20)}`,
 );
 
 const short = Array.from({ length: 3 }, (_, i) => rally(i + 1)).flat();
-eq("12往復未満はそのまま全部送る", historyWindow(short).length, 6);
+eq(`${HISTORY_RALLIES}往復未満はそのまま全部送る`, historyWindow(short).length, 6);
 eq("空の履歴は空のまま(初回発話の経路)", historyWindow([]).length, 0);
 
 // The per-message cap is 8,000 characters, so turn count alone is not a bound.

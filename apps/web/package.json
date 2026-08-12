@@ -12,7 +12,9 @@
     "check:extraction": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-extraction-guards.mjs",
     "check:loading": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-loading-guards.mjs",
     "check:gemini": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-gemini-guards.mjs",
-    "simulate:chat": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/simulate-long-conversation.mjs"
+    "simulate:chat": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/simulate-long-conversation.mjs",
+    "measure:cache": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/measure-cache-prefix.mjs",
+    "measure:cost": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/measure-session-cost.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

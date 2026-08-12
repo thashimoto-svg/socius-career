@@ -64,23 +64,76 @@ service cloud.firestore {
         }
       }
 
-      // Today's message count, one document per day.
+      // Today's message count and today's token spend, one document per day.
       //
-      // Written by the server (app/api/chat) through the Firestore REST API
-      // carrying this student's own ID token — the route handlers hold no
-      // Firestore credentials, so there is no privileged identity to write as.
-      // These rules are what make that safe: the counter may be created at 1
-      // and then only ever incremented by exactly one, and nothing may delete
-      // it. A student can spend their own budget faster. They cannot get it
-      // back, which is the only thing worth defending here.
+      // Written by the server (app/api/chat, app/api/extract) through the
+      // Firestore REST API carrying this student's own ID token — the route
+      // handlers hold no Firestore credentials, so there is no privileged
+      // identity to write as. These rules are what make that safe.
+      //
+      // Two counters with different jobs, and they move in separate writes:
+      //
+      // - `count` is the message cap. Judged before a turn runs, so the value
+      //   is known in advance and PATCHed. May be created at 1 and then only
+      //   ever incremented by exactly one. A student can spend their own budget
+      //   faster; they cannot get it back, which is the only thing worth
+      //   defending here.
+      // - the token fields are cost accounting. Only known once the model has
+      //   finished, so they arrive later and through `increment` transforms.
+      //   They may only ever go up.
+      //
+      // The two are kept apart by the branch below: a write that moves the
+      // counter must leave the tokens alone, and a write that adds tokens must
+      // leave the counter alone. That preserves the exactly-one-more rule the
+      // cap depends on — a racing second turn is still rejected rather than
+      // silently overwriting — while letting the accounting land whenever it is
+      // ready. Neither branch can lower anything.
+      function usageFields() {
+        return ['count', 'updatedAt',
+                'inputTokens', 'outputTokens', 'cacheWriteTokens', 'cacheReadTokens'];
+      }
+      function tokenFieldsHeldAt(old) {
+        return incoming().get('inputTokens', 0) == old.get('inputTokens', 0)
+          && incoming().get('outputTokens', 0) == old.get('outputTokens', 0)
+          && incoming().get('cacheWriteTokens', 0) == old.get('cacheWriteTokens', 0)
+          && incoming().get('cacheReadTokens', 0) == old.get('cacheReadTokens', 0);
+      }
+      function tokenFieldsOnlyGrow(old) {
+        return incoming().get('inputTokens', 0) >= old.get('inputTokens', 0)
+          && incoming().get('outputTokens', 0) >= old.get('outputTokens', 0)
+          && incoming().get('cacheWriteTokens', 0) >= old.get('cacheWriteTokens', 0)
+          && incoming().get('cacheReadTokens', 0) >= old.get('cacheReadTokens', 0);
+      }
+
       match /usage/{day} {
         allow read: if isOwner(uid);
+        // `count` is read through get(…, 0) rather than named directly, on
+        // both sides, because the day's first write is not always the counted
+        // turn that used to create this document. A 壁打ち's opening line is
+        // the app talking and is deliberately not charged against the cap —
+        // but it does spend tokens, so the token write can arrive first, and
+        // it carries no `count` at all. Naming the field directly makes that a
+        // rules *evaluation error* (「Property count is undefined」), which
+        // denies the write rather than treating a missing counter as zero, and
+        // the opening line's tokens would vanish from the day's total.
+        //
+        // 0 as well as 1 for the same reason: a token-first day starts the
+        // counter at zero, and the next real turn increments 0 → 1 through the
+        // update rule as usual.
         allow create: if isOwner(uid)
-          && incoming().keys().hasOnly(['count', 'updatedAt'])
-          && incoming().count == 1;
+          && incoming().keys().hasOnly(usageFields())
+          && incoming().get('count', 0) in [0, 1];
         allow update: if isOwner(uid)
-          && incoming().keys().hasOnly(['count', 'updatedAt'])
-          && incoming().count == resource.data.count + 1;
+          && incoming().keys().hasOnly(usageFields())
+          && (
+               // a counted turn
+               (incoming().get('count', 0) == resource.data.get('count', 0) + 1
+                 && tokenFieldsHeldAt(resource.data))
+               ||
+               // accounting for a turn that has finished
+               (incoming().get('count', 0) == resource.data.get('count', 0)
+                 && tokenFieldsOnlyGrow(resource.data))
+             );
         allow delete: if false;
       }
 

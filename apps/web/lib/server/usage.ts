@@ -14,6 +14,8 @@
  * clear it, which is the only attack that would matter.
  */
 
+import { hasTokens, type TokenUsage } from "./anthropic";
+
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
 
 /** 「本日の上限」 — overridable per deployment, 50 when unset. */
@@ -113,6 +115,82 @@ export async function writeUsage(
   });
 
   if (!res.ok) throw new Error(`usage write failed: ${res.status}`);
+}
+
+// ---------------------------------------------------------------------------
+// What the day cost
+// ---------------------------------------------------------------------------
+
+/**
+ * Add this turn's tokens to today's running totals.
+ *
+ * A separate write from the message counter, and a differently shaped one.
+ * The counter is judged before the turn runs, so its value is known in advance
+ * and can be PATCHed; tokens are only known once the model has finished, and
+ * two turns can finish at once — a 壁打ち reply and a background extraction
+ * overlap routinely. A read-add-write would silently drop one of them.
+ *
+ * So this goes through `:commit` with `increment` transforms, which the server
+ * applies atomically. Nothing is read first, which also means nothing can be
+ * clobbered.
+ *
+ * `updatedAt` rides along in the `update` half so the document is created if
+ * this is the day's first write — a bare transform on a missing document fails,
+ * and the day's first tokens are usually spent on a 壁打ち's opening line, which
+ * is deliberately not counted against the message cap and so has not created
+ * the document yet.
+ */
+export async function addTokenUsage(
+  uid: string,
+  idToken: string,
+  day: string,
+  tokens: TokenUsage,
+): Promise<void> {
+  if (!hasTokens(tokens)) return;
+
+  const increments: { fieldPath: string; increment: { integerValue: string } }[] = [
+    { fieldPath: "inputTokens", increment: { integerValue: String(tokens.input) } },
+    { fieldPath: "outputTokens", increment: { integerValue: String(tokens.output) } },
+    {
+      fieldPath: "cacheWriteTokens",
+      increment: { integerValue: String(tokens.cacheWrite) },
+    },
+    {
+      fieldPath: "cacheReadTokens",
+      increment: { integerValue: String(tokens.cacheRead) },
+    },
+  ];
+
+  const res = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}` +
+      `/databases/(default)/documents:commit`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${idToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        writes: [
+          {
+            update: {
+              name:
+                `projects/${PROJECT_ID}/databases/(default)/documents` +
+                `/users/${uid}/usage/${day}`,
+              fields: { updatedAt: { timestampValue: new Date().toISOString() } },
+            },
+            updateMask: { fieldPaths: ["updatedAt"] },
+            updateTransforms: increments,
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(USAGE_TIMEOUT_MS),
+    },
+  );
+
+  if (!res.ok) {
+    throw new Error(`token usage write failed: ${res.status} ${await res.text()}`);
+  }
 }
 
 export type UsageVerdict = {

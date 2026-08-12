@@ -16,7 +16,7 @@ import {
   isAiFailure,
   toAnthropicMessages,
 } from "../lib/server/anthropic.ts";
-import { historyWindow, parseMessages } from "../lib/server/transcript.ts";
+import { HISTORY_RALLIES, historyWindow, parseMessages } from "../lib/server/transcript.ts";
 import { DAILY_MESSAGE_LIMIT, usageDay } from "../lib/server/usage.ts";
 
 let failures = 0;
@@ -160,7 +160,14 @@ const rally = (i) => [
 ];
 const long = Array.from({ length: 30 }, (_, i) => rally(i + 1)).flat();
 
-eq("30往復 → 直近12往復ぶんの24件に絞られる", historyWindow(long).length, 24);
+// Written against the constant rather than a literal: this bound is a cost
+// dial that gets turned, and a guard that hardcodes today's value fails every
+// time someone turns it while testing nothing about the behaviour.
+eq(
+  `30往復 → 直近${HISTORY_RALLIES}往復ぶんの${HISTORY_RALLIES * 2}件に絞られる`,
+  historyWindow(long).length,
+  HISTORY_RALLIES * 2,
+);
 check("最新の発言は必ず残る", historyWindow(long).at(-1).text === long.at(-1).text);
 eq("配列でなければ空", parseMessages("nope").length, 0);
 eq("空白だけの発言は落ちる", parseMessages([{ role: "user", text: "   " }]).length, 0);

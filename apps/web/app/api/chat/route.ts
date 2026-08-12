@@ -1,6 +1,7 @@
 import type { MessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
+import type { TextBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import {
-  buildChatSystemPrompt,
+  buildChatSystemBlocks,
   buildOpeningInstruction,
   type PromptProfile,
   type ToneId,
@@ -10,12 +11,16 @@ import {
   callAnthropic,
   CHAT_MAX_TOKENS,
   CHAT_MODEL,
+  foldStreamUsage,
   getAnthropic,
   isAiFailure,
+  NO_TOKENS,
   toAnthropicMessages,
+  type TokenUsage,
 } from "@/lib/server/anthropic";
-import { historyWindow, parseMessages } from "@/lib/server/transcript";
+import { historyWindowWithState, parseMessages } from "@/lib/server/transcript";
 import {
+  addTokenUsage,
   checkDailyLimit,
   DAILY_LIMIT_MESSAGE,
   usageDay,
@@ -111,6 +116,7 @@ export async function POST(request: Request) {
   let stream: Awaited<ReturnType<typeof openStream>>["stream"];
   let events: AsyncIterator<MessageStreamEvent>;
   let first: string;
+  let tokens: TokenUsage;
 
   /**
    * Start the turn and pull its first piece of text.
@@ -121,16 +127,27 @@ export async function POST(request: Request) {
    * auth errors all surface on this first pull, so the common failures still
    * get a real status and a Japanese message the student can act on.
    */
+  // Only the tail of the conversation is sent. Firestore keeps all of it; what
+  // the model needs is the part it is answering.
+  const history = historyWindowWithState(messages);
+
   async function openStream() {
     const started = getAnthropic().messages.stream({
       model: CHAT_MODEL,
       max_tokens: CHAT_MAX_TOKENS,
-      system: buildChatSystemPrompt({ profile, mode, theme }),
+      // Two blocks, two cache breakpoints — the shared 深掘り層+トーン層 and
+      // then this student's オンボーディング注入部. The cast is the same seam the
+      // tool schemas use: prompts/ stays free of SDK imports so the offline
+      // guards and the Gemini rollback can read it.
+      system: buildChatSystemBlocks({ profile, mode, theme }) as TextBlockParam[],
       messages: opening
         ? [{ role: "user", content: buildOpeningInstruction() }]
-        : // Only the tail of the conversation is sent. Firestore keeps all of
-          // it; what the model needs is the part it is answering.
-          toAnthropicMessages(historyWindow(messages)),
+        : // A third breakpoint on the transcript, but only while the window
+          // still holds the whole conversation. Once it starts sliding the
+          // oldest rally falls off the front of every request and the entry
+          // could never be read — marking it then would buy nothing and be
+          // charged 1.25× for it.
+          toAnthropicMessages(history.messages, history.complete),
     });
 
     // Driven with next() rather than `for await`, because breaking out of a
@@ -139,10 +156,16 @@ export async function POST(request: Request) {
     const iterator = started[Symbol.asyncIterator]();
 
     let head = "";
+    // `message_start` carries the whole input side of the bill — including
+    // whether the cache was read — and it arrives before the first text, so it
+    // is folded in here rather than left to the loop below. Accumulated per
+    // attempt: a retried turn starts a new stream with its own usage.
+    let tokens = NO_TOKENS;
     try {
       for (;;) {
         const { value, done } = await iterator.next();
         if (done) break;
+        tokens = foldStreamUsage(tokens, value);
         const text = deltaText(value);
         if (text) {
           head = text;
@@ -161,7 +184,7 @@ export async function POST(request: Request) {
       throw new Error("empty first chunk");
     }
 
-    return { stream: started, iterator, head };
+    return { stream: started, iterator, head, tokens };
   }
 
   try {
@@ -169,6 +192,7 @@ export async function POST(request: Request) {
     stream = result.stream;
     events = result.iterator;
     first = result.head;
+    tokens = result.tokens;
 
     // Charged once the model has actually started answering, so a turn that
     // failed on quota or a bad key does not come out of the student's day.
@@ -212,6 +236,7 @@ export async function POST(request: Request) {
           }
           const { value, done } = await events.next();
           if (done) break;
+          tokens = foldStreamUsage(tokens, value);
           const text = deltaText(value);
           if (text) controller.enqueue(encoder.encode(text));
         }
@@ -221,6 +246,25 @@ export async function POST(request: Request) {
         console.error("[api/chat] stream interrupted", e);
       } finally {
         controller.close();
+
+        /**
+         * What the turn actually cost, recorded once it is over.
+         *
+         * It has to be here and not beside the message counter above: the
+         * output count is only final when the stream is, and the cache figures
+         * are what make the difference between a cheap turn and an expensive
+         * one legible. This runs on every exit from the loop, including the
+         * abort when a student navigates away mid-reply — those tokens were
+         * generated and billed, so leaving them unrecorded would make the
+         * total quietly optimistic.
+         *
+         * Never awaited by the response: the body is already closed and the
+         * student has their reply. A failure here loses one turn of accounting
+         * and nothing else, which is why it is logged rather than raised.
+         */
+        void addTokenUsage(uid, idToken, day, tokens).catch((e) =>
+          console.error("[usage] could not record the turn's tokens", e),
+        );
       }
     },
   });

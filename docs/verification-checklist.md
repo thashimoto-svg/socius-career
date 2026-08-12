@@ -250,6 +250,11 @@ npm run check:extraction   # 重複判定のしきい値
 - [ ] G-2 **「再送する」ボタンが出ない**(押しても直らないエラーなので)
 - [ ] G-3 **学生の発言自体は残っている**(返事だけが来ていない状態)
 - [ ] G-4 Firestore に `users/{uid}/usage/{今日の日付}` があり、`count` が想定値
+- [ ] G-4b 同じドキュメントに `inputTokens` / `outputTokens` /
+      `cacheWriteTokens` / `cacheReadTokens` が入っている
+- [ ] G-4c **`cacheReadTokens` が 0 より大きい**(2通目以降を送ったあと)。
+      ずっと 0 ならプロンプトキャッシュが効いていない——最小キャッシュ長を
+      割った可能性がある。`scripts/measure-cache-prefix.mjs` で測る
 - [ ] G-5 新しいセッションを作っても上限は解けない(アカウント単位)
 - [ ] G-6 Console でその `usage` ドキュメントを消す → また送れるようになる
       (学生自身は消せない。ルールで `delete` を全員に禁じているため)

@@ -1,24 +1,73 @@
+import { blocksToText, type PromptBlock } from "../cache";
 import { INVARIANT_CORE, profileBlock, type PromptProfile } from "./core";
 import { TONES, type ToneId } from "./tones";
 
 export { INVARIANT_CORE, profileBlock, TONES };
 export type { PromptProfile, ToneId };
 
-/** System instruction for an ongoing 壁打ち turn. */
-export function buildChatSystemPrompt(opts: {
+/**
+ * The system prompt, split at the line where it stops being the same for
+ * everybody.
+ *
+ * Two layers, in that order, and the order is the whole point:
+ *
+ *   1. 深掘り層 + トーン層 — identical for every student on that tone. There are
+ *      two possible values of this block in the entire product.
+ *   2. オンボーディング注入部 + 今日のテーマ — this student, this 壁打ち.
+ *
+ * Both get a cache breakpoint, because they are reused by different people.
+ * The first is shared across the whole beta cohort, so one student's first
+ * message keeps it warm for the next student's; the second is reused by one
+ * student across the turns of one conversation, which is the denser pattern
+ * but a much smaller audience. Having both means a turn hits whichever is
+ * still warm.
+ *
+ * ── Why the profile moved after the tone ──
+ * It used to sit between the core and the tone. That ordering makes layer 1
+ * uncacheable: the prefix ending at the core alone measures 643 tokens, under
+ * the 1024-token floor, so a breakpoint there would silently do nothing, and a
+ * breakpoint after the profile would key the cache to one student. Moving the
+ * profile down puts 1,224 shared tokens in front of it. The text of every layer
+ * is unchanged — this is a reordering, not a rewrite — and it reads at least as
+ * well: the rules, then the manner, then who is on the other side.
+ */
+export function buildChatSystemBlocks(opts: {
   profile: PromptProfile | null;
   mode: ToneId;
   theme?: string;
-}): string {
+}): PromptBlock[] {
   const themeBlock = opts.theme
     ? `\n\n【今日のテーマ】\n${opts.theme}\nこのテーマから逸れそうなときは、自然に引き戻してください。`
     : "";
 
   return [
-    INVARIANT_CORE,
-    profileBlock(opts.profile),
-    TONES[opts.mode].instruction + themeBlock,
-  ].join("\n\n");
+    {
+      type: "text",
+      text: `${INVARIANT_CORE}\n\n${TONES[opts.mode].instruction}`,
+      cache_control: { type: "ephemeral" },
+    },
+    {
+      type: "text",
+      text: profileBlock(opts.profile) + themeBlock,
+      cache_control: { type: "ephemeral" },
+    },
+  ];
+}
+
+/**
+ * The same prompt as one string.
+ *
+ * Kept because two things still want it: the offline guard scripts, which
+ * assert on the assembled text, and lib/server/gemini.ts, whose API has no
+ * concept of a cache breakpoint. Defined in terms of the blocks so the rollback
+ * path cannot drift from what Claude is actually sent.
+ */
+export function buildChatSystemPrompt(opts: {
+  profile: PromptProfile | null;
+  mode: ToneId;
+  theme?: string;
+}): string {
+  return blocksToText(buildChatSystemBlocks(opts));
 }
 
 /**

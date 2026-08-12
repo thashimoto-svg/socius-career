@@ -1,25 +1,27 @@
-import type { Tool } from "@anthropic-ai/sdk/resources/messages";
+import type { TextBlockParam, Tool } from "@anthropic-ai/sdk/resources/messages";
 import {
   buildExtractionPrompt,
   EPISODE_PERIODS,
   EPISODE_TAGS,
   EPISODE_TOOL_INPUT_SCHEMA,
   EPISODE_TOOL_NAME,
-  EXTRACTION_SYSTEM_PROMPT,
+  EXTRACTION_SYSTEM_BLOCKS,
   SKIP_TOOL_INPUT_SCHEMA,
   SKIP_TOOL_NAME,
   type EpisodePeriod,
   type ExtractedEpisode,
 } from "@socius/prompts";
-import { isRateLimited, verifyRequestUid } from "@/lib/server/auth";
+import { isRateLimited, verifyRequest } from "@/lib/server/auth";
 import {
   callAnthropic,
   EXTRACT_MAX_TOKENS,
   EXTRACT_MODEL,
   getAnthropic,
   isAiFailure,
+  toTokenUsage,
 } from "@/lib/server/anthropic";
 import { historyWindow, parseMessages } from "@/lib/server/transcript";
+import { addTokenUsage, usageDay } from "@/lib/server/usage";
 
 /**
  * Turn a finished 壁打ち into one STAR + 学び + 感情 episode.
@@ -110,10 +112,14 @@ function normalize(raw: unknown): ExtractedEpisode | null {
 }
 
 export async function POST(request: Request) {
-  const uid = await verifyRequestUid(request);
-  if (!uid) {
+  // verifyRequest rather than verifyRequestUid: recording what the extraction
+  // cost needs the student's own ID token, because that is the only Firestore
+  // credential this server has.
+  const caller = await verifyRequest(request);
+  if (!caller) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
+  const { uid, idToken } = caller;
   if (isRateLimited(uid)) {
     return Response.json(
       { error: "少し早すぎるようです。数秒おいてからもう一度お試しください。" },
@@ -148,7 +154,11 @@ export async function POST(request: Request) {
       getAnthropic().messages.create({
         model: EXTRACT_MODEL,
         max_tokens: EXTRACT_MAX_TOKENS,
-        system: EXTRACTION_SYSTEM_PROMPT,
+        // One breakpoint, and it covers more than it looks like: tools render
+        // before system, so this stores the two tool schemas with the prompt —
+        // 1,784 tokens that are byte-identical on every extraction in the
+        // product, for every student.
+        system: EXTRACTION_SYSTEM_BLOCKS as TextBlockParam[],
         // The whole conversation matters here in a way it does not for a single
         // turn: the job is to pick the one episode the student told best, so the
         // window is the full transcript parseMessages allows.
@@ -165,6 +175,13 @@ export async function POST(request: Request) {
         // point of SKIP_TOOL.
         tool_choice: { type: "any" },
       }),
+    );
+
+    // Recorded before any of the early returns below, because every one of
+    // them describes what the model *said*, not whether it was billed — a
+    // refusal, a truncation and an empty card all cost the same as a good one.
+    void addTokenUsage(uid, idToken, usageDay(), toTokenUsage(message.usage)).catch((e) =>
+      console.error("[usage] could not record the extraction's tokens", e),
     );
 
     // Safety classifiers answer with HTTP 200 and no usable content, so this is
