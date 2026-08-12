@@ -1,7 +1,16 @@
 @import "tailwindcss";
 
-/* Design tokens — mirror of lib/theme.ts (T). Kept in sync by hand. */
+/* Design tokens. lib/theme.ts (T) holds the names; these are the values. */
 :root {
+  /* Overwritten per frame by components/viewport-height.tsx once the visual
+     viewport is readable. 100dvh is the first-paint value, and the answer
+     anywhere the API is missing. */
+  --sc-app-height: 100dvh;
+
+  /* 文字サイズ. Set on <html> by components/settings-provider.tsx; every
+     inline font size is a calc() against it (see fs() in lib/theme.ts). */
+  --sc-font-scale: 1;
+
   --sc-bg: #f4f6f5;
   --sc-paper: #ffffff;
   --sc-ink: #22302f;
@@ -13,6 +22,66 @@
   --sc-gold-soft: #f8f1e3;
   --sc-karakuchi: #8a3b2e;
   --sc-karakuchi-soft: #f7eae6;
+  --sc-gold-ink: #8a6420;
+  --sc-on-accent: #ffffff;
+  --sc-scrim: rgba(34, 48, 47, 0.38);
+  --sc-shadow: rgba(34, 48, 47, 0.16);
+}
+
+/*
+  Dark.
+
+  Not the light palette inverted: 墨 stays the ink colour and the teal has to
+  come up several steps to stay legible against it, while the gold comes down
+  so the 自分史 cards read as warm rather than as a warning.
+
+  Two selectors, and the order between them is load-bearing. The media query
+  excludes an explicit light choice, so 「ライト」 wins over a phone in dark
+  mode. The attribute rule comes second so an explicit 「ダーク」 wins over a
+  phone in light mode — same specificity, later wins.
+*/
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sc-bg: #10171a;
+    --sc-paper: #182124;
+    --sc-ink: #e8edec;
+    --sc-sub: #93a3a1;
+    --sc-line: #2a3639;
+    --sc-primary: #58aead;
+    --sc-primary-soft: #14312f;
+    --sc-gold: #d8a855;
+    --sc-gold-soft: #33291a;
+    --sc-karakuchi: #dd9481;
+    --sc-karakuchi-soft: #35211c;
+    --sc-gold-ink: #e2b972;
+    --sc-on-accent: #0d1719;
+    --sc-scrim: rgba(4, 9, 10, 0.62);
+    --sc-shadow: rgba(0, 0, 0, 0.5);
+  }
+}
+
+:root[data-theme="dark"] {
+  --sc-bg: #10171a;
+  --sc-paper: #182124;
+  --sc-ink: #e8edec;
+  --sc-sub: #93a3a1;
+  --sc-line: #2a3639;
+  --sc-primary: #58aead;
+  --sc-primary-soft: #14312f;
+  --sc-gold: #d8a855;
+  --sc-gold-soft: #33291a;
+  --sc-karakuchi: #dd9481;
+  --sc-karakuchi-soft: #35211c;
+  --sc-gold-ink: #e2b972;
+  --sc-on-accent: #0d1719;
+  --sc-scrim: rgba(4, 9, 10, 0.62);
+  --sc-shadow: rgba(0, 0, 0, 0.5);
+}
+
+/* The frame behind the centred column, so a wide dark screen is not white. */
+html {
+  background: var(--sc-bg);
+  color-scheme: light dark;
 }
 
 /* Expose the next/font families (set on <html>) to Tailwind's theme. */
@@ -36,6 +105,35 @@ body {
   background: var(--sc-bg);
   color: var(--sc-ink);
   font-family: var(--font-sc-sans), "Zen Kaku Gothic New", sans-serif;
+  /* Without this, dragging the transcript past its end rubber-bands the whole
+     document, and the composer and tabs slide off the bottom of the screen
+     while the finger is down. */
+  overscroll-behavior-y: none;
+}
+
+/*
+  The readable column.
+
+  Lifting the 480px shell cap for the desktop screens gives the content the
+  whole window, and the whole window is the wrong amount: a line of Japanese
+  set 1400px wide is measured in how far the eye has to travel back to find the
+  start of the next one, and it loses the line about half the time. So the
+  shell grows and the text does not — 720px is roughly 45 Japanese characters
+  at this size, which is inside the range prose has been set at for centuries.
+
+  A class rather than a token because it is a media query, and media queries
+  are the one thing the inline styles everything else in this app is built from
+  cannot express.
+*/
+.sc-readable {
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .sc-readable {
+    max-width: 720px;
+    margin-inline: auto;
+  }
 }
 
 /* Shippori Mincho — used for display headings and student's own words. */
@@ -59,8 +157,38 @@ body {
   }
 }
 
+/* Session drawer: the panel slides in from the edge it is anchored to, so the
+   scrim fading in is what tells you the screen behind is still there. */
+.sc-drawer {
+  animation: scdrawer 0.22s ease-out;
+}
+
+@keyframes scdrawer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.sc-scrim {
+  animation: scscrim 0.22s ease-out;
+}
+
+@keyframes scscrim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .sc-fade {
+  .sc-fade,
+  .sc-drawer,
+  .sc-scrim {
     animation: none;
   }
 }

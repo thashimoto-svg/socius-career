@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
-import { T } from "@/lib/theme";
-
-export type ChatMode = "counselor" | "karakuchi";
+import type { ChatMode } from "@/lib/firebase/schema";
+import { fs, T } from "@/lib/theme";
 
 type BubbleProps = {
   who: "ai" | "user";
@@ -26,10 +25,10 @@ export function Bubble({ who, mode = "counselor", children }: BubbleProps) {
         style={{
           maxWidth: "82%",
           padding: "10px 13px",
-          fontSize: 13.5,
+          fontSize: fs(13.5),
           lineHeight: 1.75,
           background: ai ? accent : T.ink,
-          color: ai ? T.ink : "#fff",
+          color: ai ? T.ink : T.onAccent,
           borderRadius: ai ? "4px 14px 14px 14px" : "14px 4px 14px 14px",
         }}
       >

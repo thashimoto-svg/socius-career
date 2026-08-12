@@ -1,0 +1,26 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "apphosting": {
+    "backendId": "socius-career-web",
+    "rootDir": "apps/web",
+    "ignore": [
+      "node_modules",
+      ".git",
+      ".env*",
+      "firebase-debug.log",
+      "firebase-debug.*.log"
+    ]
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}

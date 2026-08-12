@@ -19,7 +19,13 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      // The 壁打ち prompts live in ./prompts. They keep the @socius/prompts
+      // specifier they had as a workspace package so the import lines read the
+      // same, but they are now plain source files in this app rather than a
+      // dependency — Firebase App Hosting builds one self-contained package.
+      "@socius/prompts": ["./prompts/index.ts"],
+      "@socius/prompts/*": ["./prompts/*"]
     }
   },
   "include": [

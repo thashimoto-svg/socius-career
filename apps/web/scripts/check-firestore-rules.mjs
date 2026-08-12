@@ -1,0 +1,200 @@
+/**
+ * Offline checks for firestore.rules — the usage document specifically.
+ *
+ * That document is the one place where an access-control decision and a cost
+ * decision meet. It holds two counters written by two different code paths for
+ * two different reasons: the message cap, which the server judges *before* a
+ * turn runs and PATCHes, and the day's token spend, which is only known after
+ * the model stops and arrives through `increment` transforms. Both are written
+ * with the student's own ID token, because the route handlers hold no Firestore
+ * credentials — so these rules are the entire access boundary, not a backstop
+ * behind a trusted server.
+ *
+ * The properties being defended, in order of how much they would cost to lose:
+ *
+ *   1. A student cannot get their message budget back. Spending it faster is
+ *      fine and uninteresting; clearing it is the only attack that matters.
+ *   2. A student cannot lower a token counter, i.e. cannot hide what they cost.
+ *   3. Nobody can read or write anybody else's usage.
+ *
+ * Written after a real bug: the rules named `count` directly, which made the
+ * day's first *token* write an evaluation error rather than a zero — see
+ * 「count が無いドキュメント」 below. Nothing else in the codebase would have
+ * caught it, because it fails soft: the write 403s, the .catch logs it, the
+ * conversation carries on, and the opening line's tokens quietly never appear.
+ *
+ *   npm run check:rules      (starts the Firestore emulator; needs Java)
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  assertFails,
+  assertSucceeds,
+  initializeTestEnvironment,
+} from "@firebase/rules-unit-testing";
+import { deleteDoc, doc, getDoc, increment, setDoc, updateDoc } from "firebase/firestore";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const RULES = path.resolve(here, "../../../firestore.rules");
+
+const env = await initializeTestEnvironment({
+  projectId: "socius-rules-check",
+  firestore: {
+    host: "127.0.0.1",
+    port: 8080,
+    rules: fs.readFileSync(RULES, "utf8"),
+  },
+});
+
+const ME = "student-a";
+const OTHER = "student-b";
+const DAY = "2026-08-12";
+const usagePath = (uid = ME) => `users/${uid}/usage/${DAY}`;
+
+let failures = 0;
+
+async function ok(name, promise) {
+  try {
+    await promise();
+    console.log(`  ok   ${name}`);
+  } catch (e) {
+    failures += 1;
+    console.log(`  FAIL ${name} — ${String(e.message).split("\n")[0]}`);
+  }
+}
+
+const mine = () => env.authenticatedContext(ME).firestore();
+const theirs = () => env.authenticatedContext(OTHER).firestore();
+
+/** Put a document in place without going through the rules. */
+async function seed(data) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), usagePath()), data);
+  });
+}
+
+async function fresh(data) {
+  await env.clearFirestore();
+  if (data) await seed(data);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n作成 — 一日の最初の書き込みは2種類ある");
+// ---------------------------------------------------------------------------
+
+await fresh();
+await ok("count=1 で作れる(数えられるターン)", () =>
+  assertSucceeds(setDoc(doc(mine(), usagePath()), { count: 1, updatedAt: new Date() })),
+);
+
+await fresh();
+await ok("count=0 で作れる(トークンだけが先に来る経路)", () =>
+  assertSucceeds(setDoc(doc(mine(), usagePath()), { count: 0, updatedAt: new Date() })),
+);
+
+// The bug this file was written for. 壁打ちの最初の一言は課金対象外なので
+// count を進めないが、トークンは使う。つまりその日の最初の書き込みが
+// count を持たないことがある。ルールが count を直接名指しすると、
+// 「Property count is undefined」で評価エラーになり拒否される。
+await fresh();
+await ok("count を持たない increment でも作れる(初回発話のトークン)", () =>
+  assertSucceeds(
+    setDoc(
+      doc(mine(), usagePath()),
+      { inputTokens: increment(200), outputTokens: increment(50), updatedAt: new Date() },
+      { merge: true },
+    ),
+  ),
+);
+
+await fresh();
+await ok("count=5 では作れない(枠を飛ばして始められない)", () =>
+  assertFails(setDoc(doc(mine(), usagePath()), { count: 5, updatedAt: new Date() })),
+);
+
+await fresh();
+await ok("知らないフィールドは作れない", () =>
+  assertFails(
+    setDoc(doc(mine(), usagePath()), { count: 1, evil: true, updatedAt: new Date() }),
+  ),
+);
+
+// ---------------------------------------------------------------------------
+console.log("\nメッセージ上限 — 取り戻せないこと");
+// ---------------------------------------------------------------------------
+
+await fresh({ count: 5, updatedAt: new Date() });
+await ok("+1 は通る", () => assertSucceeds(updateDoc(doc(mine(), usagePath()), { count: 6 })));
+
+await fresh({ count: 5, updatedAt: new Date() });
+await ok("+2 は弾かれる(競合した2通目は捨てる)", () =>
+  assertFails(updateDoc(doc(mine(), usagePath()), { count: 7 })),
+);
+
+await fresh({ count: 5, updatedAt: new Date() });
+await ok("巻き戻しは弾かれる", () =>
+  assertFails(updateDoc(doc(mine(), usagePath()), { count: 4 })),
+);
+
+await fresh({ count: 5, updatedAt: new Date() });
+await ok("削除できない", () => assertFails(deleteDoc(doc(mine(), usagePath()))));
+
+// ---------------------------------------------------------------------------
+console.log("\nトークン — 足せるが引けない、そして count とは混ざらない");
+// ---------------------------------------------------------------------------
+
+await fresh({ count: 3, updatedAt: new Date() });
+await ok("count 据え置きで4種類を足せる", () =>
+  assertSucceeds(
+    updateDoc(doc(mine(), usagePath()), {
+      inputTokens: increment(500),
+      outputTokens: increment(120),
+      cacheWriteTokens: increment(1403),
+      cacheReadTokens: increment(0),
+      updatedAt: new Date(),
+    }),
+  ),
+);
+
+await fresh({ count: 3, inputTokens: 900, outputTokens: 200, updatedAt: new Date() });
+await ok("トークンを減らすのは弾かれる(コストを隠せない)", () =>
+  assertFails(updateDoc(doc(mine(), usagePath()), { inputTokens: 100 })),
+);
+
+// The two writes must stay separable, or the exactly-one-more rule the cap
+// depends on would have to be relaxed to accommodate them.
+await fresh({ count: 3, inputTokens: 900, outputTokens: 200, updatedAt: new Date() });
+await ok("count とトークンを同時に動かすのは弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), usagePath()), { count: 4, inputTokens: increment(50) }),
+  ),
+);
+
+await fresh({ count: 3, inputTokens: 900, updatedAt: new Date() });
+await ok("ターンの書き込みはトークンに触れない限り通る", () =>
+  assertSucceeds(updateDoc(doc(mine(), usagePath()), { count: 4, updatedAt: new Date() })),
+);
+
+// ---------------------------------------------------------------------------
+console.log("\n所有権 — 「本人以外は読めません」");
+// ---------------------------------------------------------------------------
+
+await fresh({ count: 1, updatedAt: new Date() });
+await ok("本人は読める", () => assertSucceeds(getDoc(doc(mine(), usagePath()))));
+await ok("他人は読めない", () => assertFails(getDoc(doc(theirs(), usagePath(ME)))));
+await ok("他人は書けない", () =>
+  assertFails(updateDoc(doc(theirs(), usagePath(ME)), { count: 2 })),
+);
+await ok("他人のトークンも足せない", () =>
+  assertFails(
+    updateDoc(doc(theirs(), usagePath(ME)), { inputTokens: increment(1), updatedAt: new Date() }),
+  ),
+);
+
+await env.cleanup();
+
+console.log(
+  failures === 0 ? "\n✅ すべて通りました" : `\n❌ ${failures} 件失敗しました`,
+);
+process.exit(failures === 0 ? 0 : 1);

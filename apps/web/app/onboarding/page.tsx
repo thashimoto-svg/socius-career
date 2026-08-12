@@ -3,7 +3,9 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Chip } from "@/components/Chip";
-import { T } from "@/lib/theme";
+import { useAuth } from "@/lib/firebase/auth-context";
+import { saveOnboarding } from "@/lib/firebase/users";
+import { fs, T } from "@/lib/theme";
 
 type Step = {
   q: string;
@@ -11,17 +13,34 @@ type Step = {
   render: () => React.ReactNode;
 };
 
-const GRADES = ["大学2年", "大学3年", "大学4年", "修士1年"];
+// 7/20 MTG: 学部6年制の学科と院生が選べないままだと、対象外だと受け取られる。
+// 数が増えてチップは2〜3行に折り返すが、自分の学年が無い方が問題という判断。
+const GRADES = [
+  "大学1年",
+  "大学2年",
+  "大学3年",
+  "大学4年",
+  "大学5年(理系)",
+  "大学6年(理系)",
+  "修士1年",
+  "修士2年",
+];
 const CLUBS = ["体育会系の部活", "サークル", "アルバイト", "研究・ゼミ", "特に思いつかない"];
 const INDUSTRIES = ["メーカー", "IT", "金融", "教育", "公務員", "まだ決まっていない"];
 const UNDECIDED = "まだ決まっていない";
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const { user, userDoc, applyOnboarding } = useAuth();
   const [step, setStep] = useState(0);
-  const [grade, setGrade] = useState("大学3年");
-  const [club, setClub] = useState("体育会系の部活");
-  const [inds, setInds] = useState<string[]>([UNDECIDED]);
+  // Prefilled from a previous run, so revisiting this screen to change an
+  // answer shows what the student picked last time rather than the defaults.
+  const saved = userDoc?.profile;
+  const [grade, setGrade] = useState(saved?.grade ?? "大学3年");
+  const [club, setClub] = useState(saved?.club ?? "体育会系の部活");
+  const [inds, setInds] = useState<string[]>(saved?.industries ?? [UNDECIDED]);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const toggleInd = (v: string) =>
     setInds((s) => {
@@ -31,8 +50,6 @@ export default function OnboardingPage() {
       return next.includes(v) ? next.filter((x) => x !== v) : [...next, v];
     });
 
-  // TODO(supabase): persist { grade, club, inds } to the onboarding table and
-  // feed it into the壁打ち system prompt so the student never writes a prompt.
   const steps: Step[] = useMemo(
     () => [
       {
@@ -64,12 +81,27 @@ export default function OnboardingPage() {
 
   const done = step >= steps.length;
 
-  const advance = () => {
-    if (done) {
-      router.push("/chat");
+  // The answers are what the 壁打ち opens with, so they have to be stored before
+  // the student lands on /chat — otherwise the first question arrives with no
+  // context and the 「プロンプトを考える必要はありません」 promise breaks.
+  const advance = async () => {
+    if (!done) {
+      setStep((s) => Math.min(s + 1, steps.length));
       return;
     }
-    setStep((s) => Math.min(s + 1, steps.length));
+    if (!user || saving) return;
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const profile = { grade, club, industries: inds };
+      await saveOnboarding(user.uid, profile);
+      applyOnboarding(profile);
+      router.replace("/chat");
+    } catch {
+      setSaveError("保存できませんでした。通信状況を確認して、もう一度お試しください。");
+      setSaving(false);
+    }
   };
 
   return (
@@ -91,11 +123,11 @@ export default function OnboardingPage() {
 
       {!done ? (
         <div className="sc-fade" key={step} style={{ flex: 1 }}>
-          <div className="sc-display" style={{ fontSize: 19, fontWeight: 700, marginBottom: 6 }}>
+          <div className="sc-display" style={{ fontSize: fs(19), fontWeight: 700, marginBottom: 6 }}>
             {steps[step].q}
           </div>
           {steps[step].sub && (
-            <div style={{ fontSize: 12, color: T.sub, marginBottom: 14 }}>{steps[step].sub}</div>
+            <div style={{ fontSize: fs(12), color: T.sub, marginBottom: 14 }}>{steps[step].sub}</div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
             {steps[step].render()}
@@ -112,10 +144,10 @@ export default function OnboardingPage() {
             textAlign: "center",
           }}
         >
-          <div className="sc-display" style={{ fontSize: 20, fontWeight: 700, marginBottom: 10 }}>
+          <div className="sc-display" style={{ fontSize: fs(20), fontWeight: 700, marginBottom: 10 }}>
             準備ができました
           </div>
-          <div style={{ fontSize: 13, color: T.sub, lineHeight: 1.8 }}>
+          <div style={{ fontSize: fs(13), color: T.sub, lineHeight: 1.8 }}>
             {grade}・{club}の経験から、
             <br />
             最初の壁打ちを始めましょう。
@@ -127,22 +159,41 @@ export default function OnboardingPage() {
         </div>
       )}
 
+      {saveError && (
+        <div
+          role="alert"
+          style={{
+            marginTop: 12,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: T.karakuchiSoft,
+            color: T.karakuchi,
+            fontSize: fs(12),
+            lineHeight: 1.7,
+          }}
+        >
+          {saveError}
+        </div>
+      )}
+
       <button
         type="button"
         onClick={advance}
+        disabled={saving}
         style={{
           marginTop: 16,
           padding: "13px 0",
           borderRadius: 12,
           border: "none",
           background: T.primary,
-          color: "#fff",
-          fontSize: 14,
+          color: T.onAccent,
+          fontSize: fs(14),
           fontWeight: 700,
-          cursor: "pointer",
+          opacity: saving ? 0.6 : 1,
+          cursor: saving ? "default" : "pointer",
         }}
       >
-        {done ? "壁打ちを始める" : "次へ"}
+        {done ? (saving ? "保存しています…" : "壁打ちを始める") : "次へ"}
       </button>
       {step > 0 && !done && (
         <button
@@ -153,7 +204,7 @@ export default function OnboardingPage() {
             background: "none",
             border: "none",
             color: T.sub,
-            fontSize: 12,
+            fontSize: fs(12),
             cursor: "pointer",
           }}
         >

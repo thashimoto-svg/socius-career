@@ -1,0 +1,173 @@
+rules_version = '2';
+
+// Everything a student writes lives under their own users/{uid} document, so
+// ownership is the whole access model: you can reach a document if and only if
+// the uid in its path is yours. There is no sharing, no admin read, and no
+// public surface — 「本人以外は読めません」 on the login screen is enforced here,
+// not just promised in copy.
+//
+// Size caps exist so a compromised or buggy client cannot turn a student's
+// document tree into free storage; they are deliberately far above anything
+// the UI can produce.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        && incoming().keys().hasOnly([
+             'displayName', 'email', 'photoURL',
+             'profile', 'onboardingCompleted', 'agreedToTermsAt',
+             'createdAt', 'updatedAt'
+           ])
+        && incoming().onboardingCompleted is bool
+        // Written once, when the student ticks the box on the login screen.
+        // Optional so that documents predating the consent checkbox stay
+        // writable without a backfill that would invent a consent.
+        && (!incoming().keys().hasAny(['agreedToTermsAt'])
+            || incoming().agreedToTermsAt is timestamp);
+      // Account deletion is a support operation for now, not a client one.
+      allow delete: if false;
+
+      match /sessions/{sessionId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && incoming().keys().hasOnly([
+               'title', 'theme', 'mode', 'status',
+               'turnCount', 'episodeCount', 'extractedCount',
+               'createdAt', 'updatedAt'
+             ])
+          && incoming().title is string && incoming().title.size() <= 200
+          && incoming().mode in ['counselor', 'karakuchi']
+          && incoming().status in ['open', 'closed'];
+
+        // Messages are an append-only log: the transcript is the evidence the
+        // 自分史 is extracted from, so it must not be editable after the fact.
+        match /messages/{messageId} {
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid)
+            && incoming().keys().hasOnly(['role', 'text', 'mode', 'createdAt'])
+            && incoming().role in ['user', 'ai']
+            && incoming().text is string
+            && incoming().text.size() > 0
+            && incoming().text.size() <= 8000;
+          allow update: if false;
+          allow delete: if isOwner(uid);
+        }
+      }
+
+      // Today's message count and today's token spend, one document per day.
+      //
+      // Written by the server (app/api/chat, app/api/extract) through the
+      // Firestore REST API carrying this student's own ID token — the route
+      // handlers hold no Firestore credentials, so there is no privileged
+      // identity to write as. These rules are what make that safe.
+      //
+      // Two counters with different jobs, and they move in separate writes:
+      //
+      // - `count` is the message cap. Judged before a turn runs, so the value
+      //   is known in advance and PATCHed. May be created at 1 and then only
+      //   ever incremented by exactly one. A student can spend their own budget
+      //   faster; they cannot get it back, which is the only thing worth
+      //   defending here.
+      // - the token fields are cost accounting. Only known once the model has
+      //   finished, so they arrive later and through `increment` transforms.
+      //   They may only ever go up.
+      //
+      // The two are kept apart by the branch below: a write that moves the
+      // counter must leave the tokens alone, and a write that adds tokens must
+      // leave the counter alone. That preserves the exactly-one-more rule the
+      // cap depends on — a racing second turn is still rejected rather than
+      // silently overwriting — while letting the accounting land whenever it is
+      // ready. Neither branch can lower anything.
+      function usageFields() {
+        return ['count', 'updatedAt',
+                'inputTokens', 'outputTokens', 'cacheWriteTokens', 'cacheReadTokens'];
+      }
+      function tokenFieldsHeldAt(old) {
+        return incoming().get('inputTokens', 0) == old.get('inputTokens', 0)
+          && incoming().get('outputTokens', 0) == old.get('outputTokens', 0)
+          && incoming().get('cacheWriteTokens', 0) == old.get('cacheWriteTokens', 0)
+          && incoming().get('cacheReadTokens', 0) == old.get('cacheReadTokens', 0);
+      }
+      function tokenFieldsOnlyGrow(old) {
+        return incoming().get('inputTokens', 0) >= old.get('inputTokens', 0)
+          && incoming().get('outputTokens', 0) >= old.get('outputTokens', 0)
+          && incoming().get('cacheWriteTokens', 0) >= old.get('cacheWriteTokens', 0)
+          && incoming().get('cacheReadTokens', 0) >= old.get('cacheReadTokens', 0);
+      }
+
+      match /usage/{day} {
+        allow read: if isOwner(uid);
+        // `count` is read through get(…, 0) rather than named directly, on
+        // both sides, because the day's first write is not always the counted
+        // turn that used to create this document. A 壁打ち's opening line is
+        // the app talking and is deliberately not charged against the cap —
+        // but it does spend tokens, so the token write can arrive first, and
+        // it carries no `count` at all. Naming the field directly makes that a
+        // rules *evaluation error* (「Property count is undefined」), which
+        // denies the write rather than treating a missing counter as zero, and
+        // the opening line's tokens would vanish from the day's total.
+        //
+        // 0 as well as 1 for the same reason: a token-first day starts the
+        // counter at zero, and the next real turn increments 0 → 1 through the
+        // update rule as usual.
+        allow create: if isOwner(uid)
+          && incoming().keys().hasOnly(usageFields())
+          && incoming().get('count', 0) in [0, 1];
+        allow update: if isOwner(uid)
+          && incoming().keys().hasOnly(usageFields())
+          && (
+               // a counted turn
+               (incoming().get('count', 0) == resource.data.get('count', 0) + 1
+                 && tokenFieldsHeldAt(resource.data))
+               ||
+               // accounting for a turn that has finished
+               (incoming().get('count', 0) == resource.data.get('count', 0)
+                 && tokenFieldsOnlyGrow(resource.data))
+             );
+        allow delete: if false;
+      }
+
+      // Appearance preferences. Kept out of the user document so that changing
+      // the font size does not touch identity or the onboarding answers, which
+      // are what the 壁打ち prompt is built from.
+      match /settings/{settingId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && incoming().keys().hasOnly(['fontSize', 'theme', 'language', 'updatedAt'])
+          && (!incoming().keys().hasAny(['fontSize'])
+              || incoming().fontSize in ['small', 'normal', 'large'])
+          && (!incoming().keys().hasAny(['theme'])
+              || incoming().theme in ['light', 'dark', 'system'])
+          && (!incoming().keys().hasAny(['language'])
+              || incoming().language in ['ja']);
+      }
+
+      match /episodes/{episodeId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && incoming().keys().hasOnly([
+               'title', 'tag', 'period', 'emotion', 'star', 'learn',
+               'sessionId', 'createdAt', 'updatedAt'
+             ])
+          && incoming().title is string && incoming().title.size() <= 200
+          && incoming().star.keys().hasOnly(['S', 'T', 'A', 'R'])
+          && incoming().learn is string && incoming().learn.size() <= 2000;
+      }
+    }
+
+    // Anything not matched above stays closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,171 +1,448 @@
 "use client";
 
-import { useState } from "react";
-import type { ReactNode } from "react";
-import { Bubble, type ChatMode } from "@/components/Bubble";
-import { T } from "@/lib/theme";
-
-type Turn =
-  | { who: "user"; text: string }
-  | { who: "ai"; counselor: ReactNode; karakuchi: ReactNode };
-
-/**
- * Seeded conversation for the prototype.
- *
- * Both mode variants ask the SAME next question — style changes tone only.
- * The 抽象語→具体化 demand is invariant across modes (企画書 4.1), so keep the
- * depth identical when editing these lines.
- *
- * TODO(gemini): replace with the session's real turns; mode variants come from
- * packages/prompts/modes.
- */
-const TURNS: Turn[] = [
-  { who: "user", text: "自分の強みは、努力家なところだと思います。" },
-  {
-    who: "ai",
-    counselor: (
-      <>
-        そう感じられるのは素敵ですね。ただ「努力家」は面接ではよく出る言葉なので、あなたの努力を具体的に見せてもらえますか?
-        <b> いつ・何を・どのくらい</b>続けたか、ひとつ思い出してみましょう。
-      </>
-    ),
-    karakuchi: (
-      <>
-        「努力家」だけだと面接官には何も残りません。あなたにしか言えない事実に落としましょう。
-        <b>いつ・何を・どのくらい</b>続けた? 数字で言えるものはある?
-      </>
-    ),
-  },
-  {
-    who: "user",
-    text: "怪我で3ヶ月離脱したとき、毎朝30分試合映像を見てノートをつけていました。",
-  },
-  {
-    who: "ai",
-    counselor: (
-      <>
-        3ヶ月、毎朝30分。それはもう「努力家」より強い言葉になっていますよ。では一歩だけ深く──
-        <b>なぜ、映像とノートだったのでしょう?</b> 他の選択肢もあった中で。
-      </>
-    ),
-    karakuchi: (
-      <>
-        いいですね、それが事実の強さです。次。<b>なぜ映像とノートを選んだ?</b>{" "}
-        リハビリだけでもよかったはず。その判断にあなたが出ています。
-      </>
-    ),
-  },
-];
-
-const MODES: { id: ChatMode; label: string }[] = [
-  { id: "counselor", label: "じっくり(カウンセラー風)" },
-  { id: "karakuchi", label: "ストレート(辛口)" },
-];
+import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { defaultTheme, titleFromFirstMessage } from "@socius/prompts";
+import { AdSlot } from "@/components/AdSlot";
+import { AppHeader } from "@/components/AppHeader";
+import { Bubble } from "@/components/Bubble";
+import { AuthSplash } from "@/components/auth-splash";
+import { useExtraction } from "@/components/extraction-provider";
+import { useBeforeLeave } from "@/components/leave-guard";
+import { ScreenError } from "@/components/screen-state";
+import { useAuth } from "@/lib/firebase/auth-context";
+import { AD_INTERVAL, adSlotFollows } from "@/lib/ads";
+import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
+import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
+import { openChat, appendMessage, updateSessionMeta } from "@/lib/firebase/sessions";
+import { ToneMenu } from "@/components/ToneMenu";
+import { startChat } from "@/lib/new-chat";
+import { useLoadable } from "@/lib/use-loadable";
+import { ApiError, postStream } from "@/lib/api-client";
+import { fs, T } from "@/lib/theme";
 
 export default function ChatPage() {
-  const [mode, setMode] = useState<ChatMode>("counselor");
-  // Turns the student adds during this prototype session. The AI reply is not
-  // wired up yet, so only their own words are appended.
-  const [sent, setSent] = useState<string[]>([]);
+  // useSearchParams needs a boundary for the shell to be prerendered.
+  return (
+    <Suspense fallback={<AuthSplash />}>
+      <ChatScreen />
+    </Suspense>
+  );
+}
+
+function ChatScreen() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { user, userDoc } = useAuth();
+  const startExtraction = useExtraction();
+
+  const [session, setSession] = useState<Session | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
+  const [thinking, setThinking] = useState(false);
+  // The reply as it streams in, before it exists as a saved message.
+  const [streaming, setStreaming] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  // The turn that failed, kept so it can be asked for again.
+  //
+  // The student's message is already saved by the time the reply is requested —
+  // the transcript is append-only, so it has to be. Without this, a failed reply
+  // left the conversation with a question nobody answered and no button that
+  // would make it try again: typing the message a second time only added a
+  // second student turn. This is the way out.
+  const [failedTurn, setFailedTurn] = useState<{
+    sessionId: string;
+    transcript: Message[];
+    tone: ChatMode;
+    theme: string;
+  } | null>(null);
+  const [creatingSession, setCreatingSession] = useState(false);
 
+  const profile = userDoc?.profile ?? null;
+  // The session document is the only source of truth for the tone, so there is
+  // no local copy that could drift from what is saved.
+  const mode: ChatMode = session?.mode ?? "counselor";
   const accent = mode === "karakuchi" ? T.karakuchi : T.primary;
+  const resumeId = searchParams.get("s");
+  const theme = defaultTheme(profile);
 
-  // TODO(gemini): POST to the chat route handler and stream the reply back.
-  const send = () => {
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Which conversation to show: the one a link pointed at, otherwise the most
+  // recent unfinished 壁打ち, otherwise a new one. Loaded the same way every
+  // other screen loads its data — including the deadline, which is what stops
+  // an unreachable backend from leaving 「読み込んでいます…」 on screen forever.
+  const opened = useLoadable(
+    user?.uid ?? null,
+    (uid) =>
+      openChat(uid, {
+        resumeId,
+        fallback: { title: "新しい壁打ち", theme, mode: "counselor" },
+      }),
+    {
+      message: "壁打ちを読み込めませんでした。",
+      scope: resumeId ?? "latest",
+    },
+  );
+
+  /** Ask Gemini for the next line and append it to the transcript. */
+  const requestReply = useCallback(
+    async (sessionId: string, transcript: Message[], tone: ChatMode, theme: string) => {
+      if (!user) return;
+      setThinking(true);
+      setError(null);
+      setFailedTurn(null);
+      setStreaming("");
+      try {
+        const text = await postStream(
+          "/api/chat",
+          user,
+          {
+            mode: tone,
+            theme,
+            profile,
+            messages: transcript.map((m) => ({ role: m.role, text: m.text })),
+          },
+          (delta) => setStreaming((prev) => prev + delta),
+        );
+        // Saved only once the reply is complete: messages are append-only, so a
+        // half-written turn would be stuck in the transcript permanently.
+        const saved = await appendMessage(user.uid, sessionId, {
+          role: "ai",
+          text: text.trim(),
+          mode: tone,
+        });
+        setMessages((prev) => [...prev, saved]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "応答に失敗しました。");
+        // 再送 only where sending it again could work. The daily cap will fail
+        // the same way until the date changes, and a button that promises
+        // otherwise is worse than no button.
+        if (!(e instanceof ApiError) || e.retryable) {
+          setFailedTurn({ sessionId, transcript, tone, theme });
+        }
+      } finally {
+        setThinking(false);
+        setStreaming("");
+      }
+    },
+    [user, profile],
+  );
+
+  // The opening line needs the current tone and profile, but neither may be a
+  // dependency of the effect below: a new identity for either would re-open the
+  // session and wipe the screen out from under a conversation in progress.
+  const requestReplyRef = useRef(requestReply);
+  const themeRef = useRef(theme);
+  useEffect(() => {
+    requestReplyRef.current = requestReply;
+    themeRef.current = theme;
+  }, [requestReply, theme]);
+
+  // A 壁打ち with nothing in it is one the AI has to open, and it must be asked
+  // exactly once. React mounts every component twice in development, and a
+  // retry re-runs the load — neither is a second empty conversation.
+  const primed = useRef(new Set<string>());
+
+  // Put what was loaded on screen. Held in state rather than read straight off
+  // the loader because the conversation grows from here: every message the
+  // student sends is appended to this copy — which is also why what was loaded
+  // is the only dependency. Anything else in here re-running would replace a
+  // conversation in progress with the transcript it started from.
+  useEffect(() => {
+    const loaded = opened.data;
+
+    // Switching threads from the drawer would otherwise leave the previous
+    // conversation on screen under the new session's header until its
+    // transcript arrived.
+    setSession(loaded?.session ?? null);
+    setMessages(loaded?.messages ?? []);
+    setStreaming("");
+    setError(null);
+
+    if (!loaded || loaded.messages.length > 0) return;
+    if (primed.current.has(loaded.session.id)) return;
+
+    primed.current.add(loaded.session.id);
+    void requestReplyRef.current(
+      loaded.session.id,
+      [],
+      loaded.session.mode,
+      loaded.session.theme || themeRef.current,
+    );
+  }, [opened.data]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, thinking, streaming]);
+
+  const send = async () => {
     const text = draft.trim();
-    if (!text) return;
-    setSent((s) => [...s, text]);
+    if (!text || !user || !session || thinking) return;
+
     setDraft("");
+
+    let saved: Message;
+    try {
+      saved = await appendMessage(user.uid, session.id, {
+        role: "user",
+        text,
+        mode: null,
+      });
+    } catch {
+      // The message was never written, so there is nothing to resend — the
+      // student's words go back in the box they came from instead of vanishing.
+      setDraft(text);
+      setError("メッセージを送れませんでした。通信状況を確認して、もう一度送信してください。");
+      return;
+    }
+
+    const next = [...messages, saved];
+    setMessages(next);
+
+    // 「新しい壁打ち」 is a placeholder; the student's opening line is a better
+    // name for it in the history list.
+    if (session.title === "新しい壁打ち") {
+      const title = titleFromFirstMessage(text);
+      setSession({ ...session, title });
+      void updateSessionMeta(user.uid, session.id, { title });
+    }
+
+    await requestReply(session.id, next, session.mode, session.theme);
   };
 
+  // What automatic extraction reads, kept in a ref so the visibility listener
+  // below can stay registered once instead of being torn down and rebuilt on
+  // every message.
+  const current = useRef<{ session: Session | null; messages: Message[] }>({
+    session: null,
+    messages: [],
+  });
+  useEffect(() => {
+    current.current = { session, messages };
+  }, [session, messages]);
+
+  /**
+   * Hand the 壁打ち being left over to the background extractor.
+   *
+   * Fire-and-forget by design: the student is on their way somewhere, and the
+   * thing that does the work lives in the layout, so it outlives this screen.
+   */
+  const handOff = useCallback(
+    (minNew: number) => {
+      const { session: leaving, messages: transcript } = current.current;
+      if (!leaving || !hasNewMaterial(leaving, transcript, minNew)) return;
+
+      startExtraction({
+        session: leaving,
+        messages: transcript,
+        onRead: (extractedCount) =>
+          // Only if this screen is still showing the same 壁打ち — by the time
+          // this lands, the student is usually looking at a different one.
+          setSession((prev) =>
+            prev && prev.id === leaving.id ? { ...prev, extractedCount } : prev,
+          ),
+      });
+    },
+    [startExtraction],
+  );
+
+  /**
+   * The same handoff, for whoever navigates away from outside this screen.
+   *
+   * AppHeader's ＋ and its drawer get it as a prop, because they are rendered
+   * from here. The desktop sidebar is not — it lives in the layout, and without
+   * this, switching 壁打ち from it would leave the conversation behind with
+   * nothing ever extracted from it.
+   */
+  const handOffOnLeave = useCallback(() => handOff(MIN_NEW_ON_LEAVE), [handOff]);
+  useBeforeLeave(handOffOnLeave);
+
+  // 「最後の抽出から6メッセージ以上増えた状態でアプリ復帰時」. Backgrounding the app
+  // is the other way a 壁打ち ends — students close the tab mid-thought far more
+  // often than they tidily switch threads.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") handOff(MIN_NEW_ON_RESUME);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [handOff]);
+
+  /**
+   * Switch tone, which means starting a fresh 壁打ち.
+   *
+   * The tone is fixed for the life of a session — the transcript sent back to
+   * the model would otherwise mix two tones, and the history would no longer
+   * match the instruction that produced it. ＋ in the header covers "another
+   * one of these"; this covers "one of the other kind".
+   */
+  const switchTone = async (nextMode: ChatMode) => {
+    if (!user || creatingSession) return;
+    setCreatingSession(true);
+    handOff(MIN_NEW_ON_LEAVE);
+    try {
+      const id = await startChat(user.uid, { mode: nextMode, profile });
+      router.push(`/chat?s=${id}`);
+    } catch {
+      setError("新しい壁打ちを始められませんでした。もう一度お試しください。");
+      setCreatingSession(false);
+    }
+  };
+
+  if (!session) {
+    return opened.error ? (
+      // The header comes too, so a 壁打ち that will not load is not also a
+      // screen with no way off it.
+      <>
+        <AppHeader title="壁打ち" />
+        <ScreenError message={opened.error} onRetry={opened.retry} fill />
+      </>
+    ) : (
+      <AuthSplash />
+    );
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-      {/* theme + tone switch */}
-      <div
-        style={{
-          padding: "12px 16px 10px",
-          borderBottom: `1px solid ${T.line}`,
-          background: T.paper,
-        }}
-      >
-        {/* TODO(supabase): the theme is guided on the first session, then drawn
-            from the student's onboarding answers and past episodes. */}
-        <div style={{ fontSize: 11, color: T.sub, marginBottom: 6 }}>
-          今日のテーマ: 部活を続けた理由
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {MODES.map((m) => {
-            const active = mode === m.id;
-            const c = m.id === "karakuchi" ? T.karakuchi : T.primary;
-            const soft = m.id === "karakuchi" ? T.karakuchiSoft : T.primarySoft;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => setMode(m.id)}
-                aria-pressed={active}
-                style={{
-                  flex: 1,
-                  padding: "7px 0",
-                  borderRadius: 9,
-                  fontSize: 11.5,
-                  fontWeight: 700,
-                  border: `1.5px solid ${active ? c : T.line}`,
-                  background: active ? soft : T.paper,
-                  color: active ? c : T.sub,
-                  cursor: "pointer",
-                }}
-              >
-                {m.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      {/*
+        「今日のテーマ」 used to have this bar to itself and is gone (MTG 7/30):
+        it was the app announcing what the conversation was about to a student
+        who was in the middle of having it. The theme still shapes the system
+        prompt — it just no longer takes the widest strip of the screen to say
+        something nobody was reading.
+      */}
+      <AppHeader
+        title={session.title}
+        currentSessionId={session.id}
+        newChatMode={mode}
+        onBeforeLeave={() => handOff(MIN_NEW_ON_LEAVE)}
+        extra={
+          <ToneMenu
+            mode={mode}
+            busy={creatingSession}
+            onSwitch={(next) => void switchTone(next)}
+          />
+        }
+      />
 
       {/* transcript */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 14px 4px" }}>
-        {TURNS.map((t, i) =>
-          t.who === "user" ? (
-            <Bubble key={i} who="user">
-              {t.text}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          padding: "14px 14px 4px",
+        }}
+      >
+        {/* The scroller is the full width of the column so the scrollbar stays
+            at the window's edge; only what is read is narrowed. */}
+        <div className="sc-readable">
+        {/*
+          「モードで変わるのは言い方だけ…」 used to sit here. It was an explanation
+          of an implementation decision, printed above every conversation
+          forever, and it is gone (MTG 7/30). If the two tones need a note to
+          tell them apart, the note is not the thing to fix.
+        */}
+        {messages.map((m, i) => (
+          // Fragment rather than a wrapper, so the bubbles stay siblings and
+          // nothing about the transcript's layout depends on whether a slot
+          // happens to fall here.
+          <Fragment key={m.id}>
+            <Bubble who={m.role} mode={m.mode ?? mode}>
+              {m.text}
             </Bubble>
-          ) : (
-            // Re-key on mode so the rewritten line fades in.
-            <Bubble key={`${i}-${mode}`} who="ai" mode={mode}>
-              {mode === "karakuchi" ? t.karakuchi : t.counselor}
-            </Bubble>
-          ),
+            {/* Every AD_INTERVAL messages, and never under the last one —
+                see adSlotFollows. The index keeps successive slots from
+                being the same card three times down one conversation. */}
+            {adSlotFollows(i, messages.length) && (
+              <AdSlot index={Math.floor(i / AD_INTERVAL)} />
+            )}
+          </Fragment>
+        ))}
+
+        {thinking && (
+          <Bubble who="ai" mode={mode}>
+            {streaming ? (
+              <span aria-live="polite">{streaming}</span>
+            ) : (
+              <span style={{ color: T.sub }}>考えています…</span>
+            )}
+          </Bubble>
         )}
 
-        <div style={{ textAlign: "center", margin: "12px 0" }}>
-          <span
+        {error && (
+          <div
+            role="alert"
             style={{
-              fontSize: 10.5,
-              color: T.sub,
-              background: T.bg,
-              padding: "4px 10px",
-              borderRadius: 999,
+              margin: "8px 0",
+              padding: "9px 12px",
+              borderRadius: 10,
+              background: T.karakuchiSoft,
+              color: T.karakuchi,
+              fontSize: fs(11.5),
+              lineHeight: 1.7,
             }}
           >
-            トーンが変わっても、深掘りの段数は変わりません(全モード共通)
-          </span>
-        </div>
+            {error}
+            {failedTurn && (
+              <button
+                type="button"
+                onClick={() =>
+                  void requestReply(
+                    failedTurn.sessionId,
+                    failedTurn.transcript,
+                    failedTurn.tone,
+                    failedTurn.theme,
+                  )
+                }
+                disabled={thinking}
+                style={{
+                  display: "block",
+                  marginTop: 8,
+                  padding: "6px 18px",
+                  borderRadius: 9,
+                  border: `1.5px solid ${T.karakuchi}`,
+                  background: T.paper,
+                  color: T.karakuchi,
+                  fontSize: fs(11.5),
+                  fontWeight: 700,
+                  opacity: thinking ? 0.5 : 1,
+                  cursor: thinking ? "default" : "pointer",
+                }}
+              >
+                再送する
+              </button>
+            )}
+          </div>
+        )}
 
-        {sent.map((text, i) => (
-          <Bubble key={`sent-${i}`} who="user">
-            {text}
-          </Bubble>
-        ))}
+          <div ref={bottomRef} />
+        </div>
       </div>
 
       {/* composer */}
-      <div style={{ padding: "10px 12px", borderTop: `1px solid ${T.line}`, background: T.paper }}>
+      <div
+        style={{
+          padding: "10px 12px",
+          borderTop: `1px solid ${T.line}`,
+          background: T.paper,
+        }}
+      >
+        {/* Same column as the transcript, so the box lines up under the words
+            it is for rather than under the whole window. */}
         <form
+          className="sc-readable"
           onSubmit={(e) => {
             e.preventDefault();
-            send();
+            void send();
           }}
           style={{ display: "flex", gap: 8, alignItems: "center" }}
         >
@@ -180,7 +457,7 @@ export default function ChatPage() {
               padding: "11px 14px",
               borderRadius: 12,
               border: `1.5px solid ${T.line}`,
-              fontSize: 12.5,
+              fontSize: fs(12.5),
               color: T.ink,
               background: T.bg,
               outline: "none",
@@ -188,7 +465,7 @@ export default function ChatPage() {
           />
           <button
             type="submit"
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || thinking}
             aria-label="送信"
             style={{
               width: 40,
@@ -197,35 +474,16 @@ export default function ChatPage() {
               borderRadius: 12,
               border: "none",
               background: accent,
-              color: "#fff",
-              fontSize: 15,
+              color: T.onAccent,
+              fontSize: fs(15),
               fontWeight: 700,
-              opacity: draft.trim() ? 1 : 0.45,
-              cursor: draft.trim() ? "pointer" : "default",
+              opacity: draft.trim() && !thinking ? 1 : 0.45,
+              cursor: draft.trim() && !thinking ? "pointer" : "default",
             }}
           >
             ↑
           </button>
         </form>
-
-        {/* TODO(gemini): run the STAR extraction prompt, then route to /jibunshi. */}
-        <button
-          type="button"
-          style={{
-            width: "100%",
-            marginTop: 8,
-            padding: "9px 0",
-            borderRadius: 10,
-            border: `1.5px solid ${T.gold}`,
-            background: T.goldSoft,
-            color: "#8a6420",
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          セッションを終えて、エピソードとして残す
-        </button>
       </div>
     </div>
   );

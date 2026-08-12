@@ -1,21 +1,54 @@
+"use client";
+
 import Link from "next/link";
-import { SESSIONS } from "@/lib/sample-data";
-import { T } from "@/lib/theme";
+import { AppHeader } from "@/components/AppHeader";
+import { ScreenError, ScreenLoading } from "@/components/screen-state";
+import { useAuth } from "@/lib/firebase/auth-context";
+import { listSessions } from "@/lib/firebase/sessions";
+import { formatShortDate } from "@/lib/firebase/schema";
+import { useLoadable } from "@/lib/use-loadable";
+import { fs, T } from "@/lib/theme";
 
 // Sessions are saved automatically; tapping one resumes it, so a conversation
 // is never consumed in a single sitting.
-// TODO(supabase): read from the `sessions` table and link to /chat/[id].
 export default function HistoryPage() {
-  return (
-    <div style={{ padding: "20px 16px" }}>
-      <h1 className="sc-display" style={{ fontSize: 18, fontWeight: 700, marginBottom: 14 }}>
-        壁打ちの記録
-      </h1>
+  const { user } = useAuth();
+  const {
+    data: sessions,
+    error,
+    loading,
+    retry,
+  } = useLoadable(user?.uid ?? null, listSessions, {
+    message: "記録を読み込めませんでした。",
+  });
 
-      {SESSIONS.map((s) => (
+  return (
+    <>
+      <AppHeader title="壁打ちの記録" />
+      {/* The shell no longer scrolls, so every screen owns the panel that does. */}
+      <div
+        className="sc-readable"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 16px" }}
+      >
+
+      {error && <ScreenError message={error} onRetry={retry} />}
+
+      {loading && <ScreenLoading />}
+
+      {sessions?.length === 0 && (
+        <div style={{ fontSize: fs(12.5), color: T.sub, lineHeight: 1.9 }}>
+          まだ記録はありません。
+          <br />
+          <Link href="/chat" style={{ color: T.primary, fontWeight: 700 }}>
+            最初の壁打ちを始める
+          </Link>
+        </div>
+      )}
+
+      {sessions?.map((s) => (
         <Link
           key={s.id}
-          href="/chat"
+          href={`/chat?s=${s.id}`}
           className="sc-fade"
           style={{
             display: "block",
@@ -28,28 +61,28 @@ export default function HistoryPage() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700 }}>{s.title}</div>
-            <div style={{ fontSize: 11, color: T.sub }}>{s.date}</div>
+            <div style={{ fontSize: fs(13.5), fontWeight: 700 }}>{s.title}</div>
+            <div style={{ fontSize: fs(11), color: T.sub }}>{formatShortDate(s.updatedAt)}</div>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 7, alignItems: "center" }}>
-            <span style={{ fontSize: 10.5, color: T.sub }}>{s.turns}往復</span>
-            {s.episodes > 0 ? (
+            <span style={{ fontSize: fs(10.5), color: T.sub }}>{s.turnCount}往復</span>
+            {s.episodeCount > 0 ? (
               <span
                 style={{
-                  fontSize: 10.5,
-                  color: "#8a6420",
+                  fontSize: fs(10.5),
+                  color: T.goldInk,
                   background: T.goldSoft,
                   padding: "2px 8px",
                   borderRadius: 999,
                   fontWeight: 700,
                 }}
               >
-                自分史に{s.episodes}件
+                自分史に{s.episodeCount}件
               </span>
             ) : (
               <span
                 style={{
-                  fontSize: 10.5,
+                  fontSize: fs(10.5),
                   color: T.primary,
                   background: T.primarySoft,
                   padding: "2px 8px",
@@ -57,12 +90,13 @@ export default function HistoryPage() {
                   fontWeight: 700,
                 }}
               >
-                途中から再開できます
+                {s.status === "closed" ? "終了しました" : "途中から再開できます"}
               </span>
             )}
           </div>
         </Link>
       ))}
-    </div>
+      </div>
+    </>
   );
 }
