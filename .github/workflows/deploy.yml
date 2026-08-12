@@ -1,0 +1,94 @@
+# main にマージされたものが、そのまま本番になる。
+#
+# これが存在する理由は 2026-07-27 の本番放置事件で、原因は「マージしたが
+# デプロイを忘れた」こと。手で叩く手順が残っている限り同じことが起きるので、
+# main への push を唯一のデプロイ経路にする。
+#
+# App Hosting の GitHub 連携ではなくこの方式なのは、既存バックエンドに
+# リポジトリを後付けできないため (公式FAQ: "changing the repository isn't
+# possible")。連携するにはバックエンドの作り直し = 本番停止かURL変更が必要で、
+# しかも firestore rules は連携の対象外なので、結局この二段構えになる。
+
+name: production
+
+on:
+  push:
+    branches: [main]
+  # 手で流し直したいときのために残す (Actions タブから実行できる)。
+  workflow_dispatch:
+
+# 連続マージでロールアウトが交差しないように直列化する。走っているデプロイを
+# 途中で殺すほうが危ないので、cancel-in-progress はしない。
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # id-token は Workload Identity 連携で使う OIDC トークンの発行に要る。
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      # 依存はルートではなく apps/web にある (package.json が --prefix で委譲)。
+      - name: 依存関係
+        run: npm ci --prefix apps/web
+
+      # 本番に触る前に落とすための門番。
+      # App Hosting 側のビルドが失敗しても deploy コマンドが成功を返してしまう
+      # 既知の不具合 (firebase-tools#8866) があるため、ビルドの可否はここで見る。
+      # .env.local が無くてもビルドは通る (Firebase の初期化は遅延実行のため) ので、
+      # 公開設定値をこのファイルに複製する必要はない。
+      - name: ビルド確認
+        run: npm run build
+
+      # サービスアカウントの鍵JSONは使わない。組織ポリシー
+      # (constraints/iam.disableServiceAccountKeyCreation) で鍵の発行が禁止
+      # されているうえ、鍵を置けば「GitHub に本番の長期資格情報がある」状態が
+      # 恒久的に残る。代わりに Workload Identity 連携で、このリポジトリから
+      # 発行された OIDC トークンだけが github-deployer になれるようにしてある
+      # (プロバイダ側に assertion.repository == この リポジトリ の条件付き)。
+      # どちらも秘密情報ではないのでシークレットにする必要がない。
+      - name: Google Cloud 認証
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/921492975909/locations/global/workloadIdentityPools/github/providers/github
+          service_account: github-deployer@socius-career-web.iam.gserviceaccount.com
+
+      # apphosting と firestore:rules を一度に出す。rules は App Hosting の
+      # ロールアウトには含まれない別系統なので、ここで一緒に出さないと
+      # 「rules のデプロイ忘れ」という同じ事故が形を変えて残る。
+      # firestore:indexes は入れていない (既存インデックスの削除を伴いうるため、
+      # 変更時は手動で firebase deploy --only firestore:indexes)。
+      - name: デプロイ
+        run: |
+          npx --yes firebase-tools@15 deploy \
+            --only apphosting,firestore:rules \
+            --project socius-career-web \
+            --non-interactive
+
+      # ロールアウト後に本番が生きていることだけは必ず見る。
+      - name: 疎通確認
+        run: |
+          URL=https://socius-career-web--socius-career-web.asia-east1.hosted.app
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -L --max-time 30 "$URL" || true)
+            echo "試行 $i: $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 15
+          done
+          echo "本番が 200 を返しません。ロールバックを検討してください:"
+          echo "https://console.firebase.google.com/project/socius-career-web/apphosting"
+          exit 1
