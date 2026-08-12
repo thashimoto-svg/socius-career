@@ -28,6 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # id-token は Workload Identity 連携で使う OIDC トークンの発行に要る。
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -49,10 +54,18 @@ jobs:
       - name: ビルド確認
         run: npm run build
 
+      # サービスアカウントの鍵JSONは使わない。組織ポリシー
+      # (constraints/iam.disableServiceAccountKeyCreation) で鍵の発行が禁止
+      # されているうえ、鍵を置けば「GitHub に本番の長期資格情報がある」状態が
+      # 恒久的に残る。代わりに Workload Identity 連携で、このリポジトリから
+      # 発行された OIDC トークンだけが github-deployer になれるようにしてある
+      # (プロバイダ側に assertion.repository == この リポジトリ の条件付き)。
+      # どちらも秘密情報ではないのでシークレットにする必要がない。
       - name: Google Cloud 認証
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          workload_identity_provider: projects/921492975909/locations/global/workloadIdentityPools/github/providers/github
+          service_account: github-deployer@socius-career-web.iam.gserviceaccount.com
 
       # apphosting と firestore:rules を一度に出す。rules は App Hosting の
       # ロールアウトには含まれない別系統なので、ここで一緒に出さないと
