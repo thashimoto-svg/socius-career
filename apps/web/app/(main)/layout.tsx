@@ -135,7 +135,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             it — the sidebar shows the same three without covering anything.
           */}
           <nav
-            className="flex md:hidden"
+            // sc-tabs: globals.css hides it while the composer has focus, so
+            // the box the student is typing in sits directly on the keyboard.
+            className="sc-tabs flex md:hidden"
             style={{
               flexShrink: 0,
               borderTop: `1px solid ${T.line}`,

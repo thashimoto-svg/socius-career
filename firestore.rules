@@ -42,12 +42,19 @@ service cloud.firestore {
         allow create, update: if isOwner(uid)
           && incoming().keys().hasOnly([
                'title', 'theme', 'mode', 'status',
-               'turnCount', 'episodeCount', 'extractedCount',
+               'turnCount', 'episodeCount', 'extractedCount', 'progress',
                'createdAt', 'updatedAt'
              ])
           && incoming().title is string && incoming().title.size() <= 200
           && incoming().mode in ['counselor', 'karakuchi']
-          && incoming().status in ['open', 'closed'];
+          && incoming().status in ['open', 'closed']
+          // Which of the five 節 the 壁打ち has covered. Optional, because
+          // every session created before the rail existed has no such field
+          // and must stay writable without a backfill. Bounded rather than
+          // typed member by member — rules cannot check a list's elements,
+          // and five is the whole vocabulary.
+          && (!incoming().keys().hasAny(['progress'])
+              || (incoming().progress is list && incoming().progress.size() <= 5));
 
         // Messages are an append-only log: the transcript is the evidence the
         // 自分史 is extracted from, so it must not be editable after the fact.

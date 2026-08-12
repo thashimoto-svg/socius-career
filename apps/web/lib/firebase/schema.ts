@@ -1,4 +1,9 @@
-import { EPISODE_PERIODS, type EpisodePeriod } from "@socius/prompts";
+import {
+  EPISODE_PERIODS,
+  toProgress,
+  type EpisodePeriod,
+  type ProgressStep,
+} from "@socius/prompts";
 import {
   collection,
   doc,
@@ -64,6 +69,17 @@ export type Session = {
    * a re-run a re-run of the *new* part rather than of the whole conversation.
    */
   extractedCount: number;
+  /**
+   * Which of the five 節 the conversation has actually covered — what the rail
+   * under the header shows.
+   *
+   * Stored rather than recomputed, because the only place it exists is in the
+   * markers the model appends to its replies, and those are stripped before a
+   * message is saved. Keeping them in the transcript instead would put a
+   * bracketed token in every document that the 自分史 extraction reads and the
+   * 履歴 screen displays, one missed strip away from the student seeing it.
+   */
+  progress: ProgressStep[];
   createdAt: Date | null;
   updatedAt: Date | null;
 };
@@ -158,6 +174,9 @@ export function toSession(id: string, d: DocumentData): Session {
     // mechanism yet, and the duplicate check catches anything the old manual
     // button already saved.
     extractedCount: typeof d.extractedCount === "number" ? d.extractedCount : 0,
+    // Sessions from before the rail existed read as empty, which is honest:
+    // nothing was ever judged about them. They fill from their next reply.
+    progress: toProgress(d.progress),
     createdAt: toDate(d.createdAt),
     updatedAt: toDate(d.updatedAt),
   };

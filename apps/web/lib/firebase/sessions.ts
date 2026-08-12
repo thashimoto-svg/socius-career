@@ -1,3 +1,4 @@
+import type { ProgressStep } from "@socius/prompts";
 import {
   addDoc,
   getDoc,
@@ -56,6 +57,7 @@ export async function createSession(
     turnCount: 0,
     episodeCount: 0,
     extractedCount: 0,
+    progress: [],
     createdAt: null,
     updatedAt: null,
   };
@@ -179,6 +181,22 @@ export async function updateSessionMeta(
     ...patch,
     updatedAt: serverTimestamp(),
   });
+}
+
+/**
+ * Record which of the five 節 the conversation has now covered.
+ *
+ * `updatedAt` is left alone on purpose, the same way markExtracted leaves it:
+ * the reply that carried these markers has already moved it, and touching it
+ * again from a second write would reorder the history list for a reason the
+ * student did nothing to cause.
+ */
+export async function saveProgress(
+  uid: string,
+  sessionId: string,
+  progress: ProgressStep[],
+): Promise<void> {
+  await updateDoc(sessionRef(uid, sessionId), { progress });
 }
 
 /**
