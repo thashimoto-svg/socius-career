@@ -2,10 +2,17 @@
 
 import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { defaultTheme, titleFromFirstMessage } from "@socius/prompts";
+import {
+  defaultTheme,
+  mergeProgress,
+  readProgress,
+  stripProgressMarkers,
+  titleFromFirstMessage,
+} from "@socius/prompts";
 import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
+import { ProgressRail } from "@/components/ProgressRail";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
 import { useBeforeLeave } from "@/components/leave-guard";
@@ -14,7 +21,13 @@ import { useAuth } from "@/lib/firebase/auth-context";
 import { AD_INTERVAL, adSlotFollows } from "@/lib/ads";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
 import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
-import { openChat, appendMessage, updateSessionMeta } from "@/lib/firebase/sessions";
+import type { ProgressStep } from "@socius/prompts";
+import {
+  openChat,
+  appendMessage,
+  saveProgress,
+  updateSessionMeta,
+} from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
 import { startChat } from "@/lib/new-chat";
 import { useLoadable } from "@/lib/use-loadable";
@@ -68,6 +81,12 @@ function ChatScreen() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // The 節 the conversation has covered, mirrored out of the session so the
+  // reply handler can merge into it. A ref rather than a dependency: taking the
+  // session would rebuild requestReply on every turn, and the effect that opens
+  // the conversation watches it.
+  const progressRef = useRef<ProgressStep[]>([]);
+
   // Which conversation to show: the one a link pointed at, otherwise the most
   // recent unfinished 壁打ち, otherwise a new one. Loaded the same way every
   // other screen loads its data — including the deadline, which is what stops
@@ -94,7 +113,7 @@ function ChatScreen() {
       setFailedTurn(null);
       setStreaming("");
       try {
-        const text = await postStream(
+        const raw = await postStream(
           "/api/chat",
           user,
           {
@@ -105,14 +124,41 @@ function ChatScreen() {
           },
           (delta) => setStreaming((prev) => prev + delta),
         );
+
+        // The progress markers come off here, before anything is written down.
+        // Nothing downstream — the transcript, the 自分史 extraction, the next
+        // request's history — ever sees one, so there is exactly one place that
+        // has to get the stripping right.
+        const { text, steps } = readProgress(raw);
+        if (!text) {
+          // A reply that was nothing but markers. Retryable, because it is the
+          // model having a bad turn rather than anything about this student.
+          throw new ApiError(502, "返答を受け取れませんでした。もう一度お試しください。");
+        }
+
         // Saved only once the reply is complete: messages are append-only, so a
         // half-written turn would be stuck in the transcript permanently.
         const saved = await appendMessage(user.uid, sessionId, {
           role: "ai",
-          text: text.trim(),
+          text,
           mode: tone,
         });
         setMessages((prev) => [...prev, saved]);
+
+        const merged = mergeProgress(progressRef.current, steps);
+        if (merged.length !== progressRef.current.length) {
+          progressRef.current = merged;
+          setSession((prev) =>
+            prev && prev.id === sessionId ? { ...prev, progress: merged } : prev,
+          );
+          // Losing this costs the rail its memory the next time the 壁打ち is
+          // opened, and nothing else — the conversation is already saved. Not
+          // worth an error the student has to read, and not worth failing the
+          // turn over, so it is logged.
+          void saveProgress(user.uid, sessionId, merged).catch((e) =>
+            console.error("[progress] 進捗を保存できませんでした", e),
+          );
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "応答に失敗しました。");
         // 再送 only where sending it again could work. The daily cap will fail
@@ -159,6 +205,7 @@ function ChatScreen() {
     setMessages(loaded?.messages ?? []);
     setStreaming("");
     setError(null);
+    progressRef.current = loaded?.session.progress ?? [];
 
     if (!loaded || loaded.messages.length > 0) return;
     if (primed.current.has(loaded.session.id)) return;
@@ -307,6 +354,8 @@ function ChatScreen() {
     }
   };
 
+  const streamed = stripProgressMarkers(streaming);
+
   if (!session) {
     return opened.error ? (
       // The header comes too, so a 壁打ち that will not load is not also a
@@ -350,6 +399,10 @@ function ChatScreen() {
         }
       />
 
+      {/* Directly under the header and outside the scroller, so 「あと何を話せば
+          終わりなのか」 is answered without scrolling back up for it. */}
+      <ProgressRail steps={session.progress} accent={accent} />
+
       {/* transcript */}
       <div
         style={{
@@ -387,8 +440,14 @@ function ChatScreen() {
 
         {thinking && (
           <Bubble who="ai" mode={mode}>
-            {streaming ? (
-              <span aria-live="polite">{streaming}</span>
+            {/* Markers are stripped on the way to the screen as well as on the
+                way to Firestore: a reply is rendered while it is still being
+                written, so 「[progress:situation]」 would otherwise be on screen
+                for as long as the last chunk takes to arrive. The partial form
+                counts too — a tail of 「[progr」 is a marker that has not
+                finished landing, not something the student wrote. */}
+            {streamed ? (
+              <span aria-live="polite">{streamed}</span>
             ) : (
               <span style={{ color: T.sub }}>考えています…</span>
             )}

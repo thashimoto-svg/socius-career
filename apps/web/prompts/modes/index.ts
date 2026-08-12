@@ -1,4 +1,5 @@
 import { blocksToText, type PromptBlock } from "../cache";
+import { PROGRESS_PROTOCOL } from "../progress";
 import { INVARIANT_CORE, profileBlock, type PromptProfile } from "./core";
 import { TONES, type ToneId } from "./tones";
 
@@ -42,8 +43,13 @@ export function buildChatSystemBlocks(opts: {
 
   return [
     {
+      // The progress protocol belongs in here rather than in the per-student
+      // block below: it is byte-identical for the whole cohort on both tones,
+      // so it rides the cache that is already warm instead of paying for
+      // itself on every conversation. Last, because it is the one thing in
+      // this block that is not about how to talk to the student.
       type: "text",
-      text: `${INVARIANT_CORE}\n\n${TONES[opts.mode].instruction}`,
+      text: `${INVARIANT_CORE}\n\n${TONES[opts.mode].instruction}\n\n${PROGRESS_PROTOCOL}`,
       cache_control: { type: "ephemeral" },
     },
     {
