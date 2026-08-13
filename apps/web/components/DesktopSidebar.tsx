@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ScreenError, ScreenLoading } from "@/components/screen-state";
 import { useLeaveGuard } from "@/components/leave-guard";
+import { SessionDeleteButton, useSessionDelete } from "@/components/session-delete";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { formatShortDate, type Session } from "@/lib/firebase/schema";
 import { listSessions } from "@/lib/firebase/sessions";
@@ -117,6 +118,12 @@ export function DesktopSidebar() {
   useEffect(() => {
     if (loaded.data) setShown(loaded.data);
   }, [loaded.data]);
+
+  // Keeping the last good list is what makes this one need the filter most:
+  // a row deleted from here would otherwise sit in `shown` until the student
+  // navigated somewhere, which on a desktop can be a long time.
+  const { deletedIds } = useSessionDelete();
+  const rows = shown?.filter((s) => !deletedIds.has(s.id)) ?? null;
 
   const newChat = async () => {
     if (!user || creating) return;
@@ -250,48 +257,51 @@ export function DesktopSidebar() {
 
         {loaded.loading && shown === null && <ScreenLoading />}
 
-        {shown?.length === 0 && (
+        {rows?.length === 0 && (
           <div style={{ padding: "6px 6px", fontSize: fs(11), color: T.sub, lineHeight: 1.9 }}>
             まだ記録はありません。
           </div>
         )}
 
-        {shown?.map((s) => {
+        {rows?.map((s) => {
           const current = s.id === currentSessionId;
           return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => openSession(s.id)}
-              aria-current={current ? "true" : undefined}
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "8px 10px",
-                marginBottom: 4,
-                borderRadius: 9,
-                border: `1px solid ${current ? T.primary : "transparent"}`,
-                background: current ? T.primarySoft : "transparent",
-                color: T.ink,
-                cursor: "pointer",
-              }}
-            >
-              <div
+            // Siblings, not nested: a button inside a button is one target.
+            <div key={s.id} style={{ position: "relative", marginBottom: 4 }}>
+              <button
+                type="button"
+                onClick={() => openSession(s.id)}
+                aria-current={current ? "true" : undefined}
                 style={{
-                  fontSize: fs(12),
-                  fontWeight: 700,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  // Right side left clear for the 🗑.
+                  padding: "8px 42px 8px 10px",
+                  borderRadius: 9,
+                  border: `1px solid ${current ? T.primary : "transparent"}`,
+                  background: current ? T.primarySoft : "transparent",
+                  color: T.ink,
+                  cursor: "pointer",
                 }}
               >
-                {s.title}
-              </div>
-              <div style={{ fontSize: fs(10), color: T.sub, marginTop: 3 }}>
-                {formatShortDate(s.updatedAt)}・{s.turnCount}往復
-              </div>
-            </button>
+                <div
+                  style={{
+                    fontSize: fs(12),
+                    fontWeight: 700,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.title}
+                </div>
+                <div style={{ fontSize: fs(10), color: T.sub, marginTop: 3 }}>
+                  {formatShortDate(s.updatedAt)}・{s.turnCount}往復
+                </div>
+              </button>
+              <SessionDeleteButton sessionId={s.id} title={s.title} current={current} />
+            </div>
           );
         })}
       </div>

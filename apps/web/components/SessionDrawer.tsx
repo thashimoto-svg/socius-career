@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { ScreenError, ScreenLoading } from "@/components/screen-state";
+import { SessionDeleteButton, useSessionDelete } from "@/components/session-delete";
 import { listSessions } from "@/lib/firebase/sessions";
 import { formatShortDate } from "@/lib/firebase/schema";
 import { useLoadable } from "@/lib/use-loadable";
@@ -55,13 +56,22 @@ export function SessionDrawer({
     retry,
   } = useLoadable(uid, listSessions, { message: "記録を読み込めませんでした。" });
 
+  // What was read a moment ago, minus anything deleted since. The drawer is
+  // mounted fresh on every open, so this only matters for a delete made from
+  // the drawer itself — which is where most of them are made.
+  const { deletedIds, confirming } = useSessionDelete();
+  const rows = sessions?.filter((s) => !deletedIds.has(s.id)) ?? null;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // Not while the delete confirmation is up. Both listen on the window, so
+      // one press would otherwise answer the dialog and close the drawer it is
+      // standing on at the same time.
+      if (e.key === "Escape" && !confirming) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, confirming]);
 
   return (
     <>
@@ -164,48 +174,62 @@ export function SessionDrawer({
 
           {loading && <ScreenLoading />}
 
-          {sessions?.length === 0 && (
+          {rows?.length === 0 && (
             <div style={{ fontSize: fs(11.5), color: T.sub, lineHeight: 1.9 }}>
               まだ記録はありません。
             </div>
           )}
 
-          {sessions?.map((s) => {
+          {rows?.map((s) => {
             const current = s.id === currentSessionId;
             return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => onSelect(s.id)}
-                aria-current={current ? "true" : undefined}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  padding: "10px 11px",
-                  marginBottom: 7,
-                  borderRadius: 11,
-                  border: `1px solid ${current ? T.primary : T.line}`,
-                  background: current ? T.primarySoft : T.paper,
-                  color: T.ink,
-                  cursor: "pointer",
-                }}
-              >
-                <div
+              // The row and its 🗑 are siblings inside this box rather than one
+              // inside the other — nesting them would be a button inside a
+              // button, which is one target, not two.
+              <div key={s.id} style={{ position: "relative", marginBottom: 7 }}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(s.id)}
+                  aria-current={current ? "true" : undefined}
                   style={{
-                    fontSize: fs(12.5),
-                    fontWeight: 700,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    // Right side left clear for the 🗑, so the title never runs
+                    // under it and the two are not one ambiguous tap.
+                    padding: "10px 44px 10px 11px",
+                    borderRadius: 11,
+                    border: `1px solid ${current ? T.primary : T.line}`,
+                    background: current ? T.primarySoft : T.paper,
+                    color: T.ink,
+                    cursor: "pointer",
                   }}
                 >
-                  {s.title}
-                </div>
-                <div style={{ fontSize: fs(10.5), color: T.sub, marginTop: 4 }}>
-                  {formatShortDate(s.updatedAt)}・{s.turnCount}往復
-                </div>
-              </button>
+                  <div
+                    style={{
+                      fontSize: fs(12.5),
+                      fontWeight: 700,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {s.title}
+                  </div>
+                  <div style={{ fontSize: fs(10.5), color: T.sub, marginTop: 4 }}>
+                    {formatShortDate(s.updatedAt)}・{s.turnCount}往復
+                  </div>
+                </button>
+                <SessionDeleteButton
+                  sessionId={s.id}
+                  title={s.title}
+                  current={current}
+                  // Deleting the 壁打ち on screen sends the student back to
+                  // /chat; leaving the drawer open over where they land would
+                  // hide the thing they were moved to.
+                  onDeleted={current ? onClose : undefined}
+                />
+              </div>
             );
           })}
         </div>

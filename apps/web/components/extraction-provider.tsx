@@ -8,10 +8,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { Toast, TOAST_MS, type ToastTone } from "@/components/toast";
 import { useAuth } from "@/lib/firebase/auth-context";
-import { extractEpisode } from "@/lib/extraction";
+import { extractEpisode, isExtractionAbandoned } from "@/lib/extraction";
 import type { Message, Session } from "@/lib/firebase/schema";
-import { fs, T } from "@/lib/theme";
 
 /**
  * Where automatic extraction actually runs.
@@ -42,12 +42,9 @@ export function useExtraction(): StartExtraction {
   return useContext(ExtractionContext);
 }
 
-/** How long a toast stays before it goes away on its own. */
-const TOAST_MS = 4200;
-
 export function ExtractionProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  const [toast, setToast] = useState<{ id: number; text: string; tone: "ok" | "warn" } | null>(
+  const [toast, setToast] = useState<{ id: number; text: string; tone: ToastTone } | null>(
     null,
   );
   // One run per 壁打ち at a time. Two triggers can land together — leaving a
@@ -59,6 +56,10 @@ export function ExtractionProvider({ children }: { children: React.ReactNode }) 
     (job) => {
       if (!user) return;
       if (running.current.has(job.session.id)) return;
+      // Being deleted. Leaving a 壁打ち is what triggers extraction, and
+      // deleting the open one leaves it — so this is not a rare race, it is the
+      // ordinary path through the delete button.
+      if (isExtractionAbandoned(job.session.id)) return;
       running.current.add(job.session.id);
 
       const read = job.messages.length;
@@ -109,33 +110,9 @@ export function ExtractionProvider({ children }: { children: React.ReactNode }) 
     <ExtractionContext.Provider value={start}>
       {children}
       {toast && (
-        <div
-          // Announced rather than shown only: the student is usually looking at
-          // the conversation they just moved to, not at the bottom of the screen.
-          role="status"
-          aria-live="polite"
-          className="sc-fade"
-          key={toast.id}
-          style={{
-            position: "fixed",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: "calc(env(safe-area-inset-bottom, 0px) + 66px)",
-            zIndex: 60,
-            maxWidth: "min(432px, calc(100% - 32px))",
-            padding: "10px 16px",
-            borderRadius: 12,
-            background: toast.tone === "ok" ? T.goldSoft : T.karakuchiSoft,
-            border: `1.5px solid ${toast.tone === "ok" ? T.gold : T.karakuchi}`,
-            color: toast.tone === "ok" ? T.goldInk : T.karakuchi,
-            fontSize: fs(11.5),
-            fontWeight: 700,
-            lineHeight: 1.7,
-            boxShadow: `0 6px 20px ${T.shadow}`,
-          }}
-        >
+        <Toast key={toast.id} tone={toast.tone}>
           {toast.text}
-        </div>
+        </Toast>
       )}
     </ExtractionContext.Provider>
   );

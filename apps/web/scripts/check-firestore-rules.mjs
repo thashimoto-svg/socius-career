@@ -52,6 +52,12 @@ const OTHER = "student-b";
 const DAY = "2026-08-12";
 const usagePath = (uid = ME) => `users/${uid}/usage/${DAY}`;
 
+const SESSION = "session-1";
+const sessionPath = (uid = ME) => `users/${uid}/sessions/${SESSION}`;
+const messagePath = (uid = ME, messageId = "message-1") =>
+  `users/${uid}/sessions/${SESSION}/messages/${messageId}`;
+const episodePath = (uid = ME) => `users/${uid}/episodes/episode-1`;
+
 let failures = 0;
 
 async function ok(name, promise) {
@@ -67,11 +73,17 @@ async function ok(name, promise) {
 const mine = () => env.authenticatedContext(ME).firestore();
 const theirs = () => env.authenticatedContext(OTHER).firestore();
 
-/** Put a document in place without going through the rules. */
-async function seed(data) {
+/** Put documents in place without going through the rules. */
+async function seedAt(entries) {
   await env.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(doc(ctx.firestore(), usagePath()), data);
+    for (const [path, data] of entries) {
+      await setDoc(doc(ctx.firestore(), path), data);
+    }
   });
+}
+
+async function seed(data) {
+  await seedAt([[usagePath(), data]]);
 }
 
 async function fresh(data) {
@@ -190,6 +202,87 @@ await ok("他人のトークンも足せない", () =>
   assertFails(
     updateDoc(doc(theirs(), usagePath(ME)), { inputTokens: increment(1), updatedAt: new Date() }),
   ),
+);
+
+// ---------------------------------------------------------------------------
+console.log("\n壁打ちの削除 — 消せるのは自分のものだけ");
+// ---------------------------------------------------------------------------
+
+/**
+ * A 壁打ち with a transcript, and an episode extracted from it — for both
+ * students, so that every 「他人の」 case below has something real to fail
+ * against rather than passing because the document was never there.
+ */
+async function freshSessions() {
+  await env.clearFirestore();
+  const tree = (uid) => [
+    [
+      sessionPath(uid),
+      {
+        title: "面接で話せる話がない",
+        theme: "",
+        mode: "counselor",
+        status: "open",
+        turnCount: 4,
+        episodeCount: 1,
+        extractedCount: 4,
+      },
+    ],
+    [messagePath(uid), { role: "user", text: "部活の話ならできます" }],
+    [
+      episodePath(uid),
+      {
+        title: "集合時間を10分前倒しにした提案",
+        tag: "リーダーシップ",
+        period: "大学2年",
+        emotion: "焦り",
+        star: { S: "", T: "", A: "", R: "" },
+        learn: "",
+        // Deliberately pointing at the session deleted below: the episode has
+        // to survive it, and the 自分史 hides its link rather than the card
+        // being rewritten or dropped.
+        sessionId: SESSION,
+      },
+    ],
+  ];
+  await seedAt([...tree(ME), ...tree(OTHER)]);
+}
+
+await freshSessions();
+await ok("本人は自分の壁打ちを削除できる", () =>
+  assertSucceeds(deleteDoc(doc(mine(), sessionPath()))),
+);
+
+await freshSessions();
+await ok("本人は自分のメッセージを削除できる(本体より先に消す経路)", () =>
+  assertSucceeds(deleteDoc(doc(mine(), messagePath()))),
+);
+
+await freshSessions();
+await ok("他人の壁打ちは削除できない", () =>
+  assertFails(deleteDoc(doc(theirs(), sessionPath(ME)))),
+);
+
+await freshSessions();
+await ok("他人のメッセージは削除できない", () =>
+  assertFails(deleteDoc(doc(theirs(), messagePath(ME)))),
+);
+
+await freshSessions();
+await ok("他人は壁打ちを読めない", () => assertFails(getDoc(doc(theirs(), sessionPath(ME)))));
+
+// 壁打ちを消してもエピソードは残る、というのはアプリ側の約束であってルールの
+// 効果ではない (ルールは cascade しないので、消しに行かない限り残る)。ここで
+// 見ているのは、その約束の逆側 — エピソードの削除権限が本人だけのまま
+// 変わっていないこと。
+await freshSessions();
+await ok("本人は自分のエピソードを削除できる(既存のまま)", () =>
+  assertSucceeds(deleteDoc(doc(mine(), episodePath()))),
+);
+
+await freshSessions();
+await ok("他人のエピソードは削除できない", () =>
+  assertFails(deleteDoc(doc(theirs(), episodePath(ME)))),
 );
 
 await env.cleanup();

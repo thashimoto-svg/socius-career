@@ -51,6 +51,30 @@ export const MIN_NEW_ON_LEAVE = 2;
 export const MIN_NEW_ON_RESUME = 6;
 
 /**
+ * 壁打ち that are being deleted, and must therefore never be extracted again.
+ *
+ * Deleting a conversation and extracting from it are triggered by the same
+ * gesture. Leaving a 壁打ち hands it to the extractor, and deleting the one you
+ * are looking at leaves it — so without this, the delete and a run over the
+ * transcript it is removing would be in flight at the same time, and the run
+ * would finish by writing `extractedCount` to a document that no longer exists.
+ *
+ * Marked before the first document is touched, so there is no window where a
+ * trigger can still get in. Entries are never removed: a Firestore id is not
+ * reused, so a session that has been abandoned once can never legitimately come
+ * back, and the set only grows by one string per delete in one tab.
+ */
+const abandoned = new Set<string>();
+
+export function abandonExtraction(sessionId: string): void {
+  abandoned.add(sessionId);
+}
+
+export function isExtractionAbandoned(sessionId: string): boolean {
+  return abandoned.has(sessionId);
+}
+
+/**
  * Whether this 壁打ち has enough unread conversation to be worth a run.
  *
  * A new *student* turn is required, not just any new line: the AI's opening
@@ -82,6 +106,11 @@ export async function extractEpisode(
   session: Session,
   messages: Message[],
 ): Promise<ExtractionOutcome> {
+  // Being deleted. Nothing about this conversation is worth reading any more,
+  // and every write below would be a write into a document that is on its way
+  // out. Silent rather than an error: the student asked for this.
+  if (isExtractionAbandoned(session.id)) return { kind: "nothing" };
+
   try {
     // Every episode, then narrowed to this 壁打ち. Filtered here rather than
     // queried by sessionId so this needs no composite index; the list is capped
@@ -93,6 +122,14 @@ export async function extractEpisode(
       messages: messages.map((m) => ({ role: m.role, text: m.text })),
       savedTitles: fromThisSession.map((e) => e.title),
     });
+
+    // Checked again on the way back, because this is the slow part: the request
+    // takes seconds and deleting the 壁打ち takes one tap, so the student can
+    // easily do it while the model is still thinking. Nothing is written from
+    // here on — not the episode either. A card appearing on the 自分史 out of a
+    // conversation the student has just thrown away would be the app arguing
+    // with them.
+    if (isExtractionAbandoned(session.id)) return { kind: "nothing" };
 
     if (!episode) {
       // Nothing new to save is a normal result, and the transcript still counts

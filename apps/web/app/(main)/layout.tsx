@@ -7,6 +7,7 @@ import { DesktopSidebar, DesktopSidebarFallback } from "@/components/DesktopSide
 import { ExtractionProvider } from "@/components/extraction-provider";
 import { LeaveGuardProvider } from "@/components/leave-guard";
 import { RequireAuth } from "@/components/require-auth";
+import { SessionDeleteProvider } from "@/components/session-delete";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { fs, T } from "@/lib/theme";
 
@@ -96,6 +97,11 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             sidebar navigates away from a 壁打ち it is not inside, so the screen
             being left has to have somewhere to leave its handoff. */}
         <LeaveGuardProvider>
+        {/* Also above the pages: deleting the 壁打ち you are reading navigates
+            off it, so the confirmation and the toast that follows cannot belong
+            to the screen being left. Inside the leave guard, because the three
+            lists that raise it are the same three that navigate. */}
+        <SessionDeleteProvider>
         {/*
           Pinned to exactly the visible height rather than allowed to grow.
           Everything that has to stay on screen — the tab bar, and the composer
@@ -172,6 +178,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           </nav>
           </div>
         </div>
+        </SessionDeleteProvider>
         </LeaveGuardProvider>
       </ExtractionProvider>
     </RequireAuth>
