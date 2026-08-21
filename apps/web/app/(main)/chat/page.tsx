@@ -23,6 +23,7 @@ import {
 import { MessageDeleteDialog, MessageEdit } from "@/components/MessageEdit";
 import { ProgressRail } from "@/components/ProgressRail";
 import { ReplyChoices } from "@/components/ReplyChoices";
+import { WorksheetPanel } from "@/components/WorksheetPanel";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
 import { useBeforeLeave } from "@/components/leave-guard";
@@ -39,6 +40,7 @@ import {
   editUserMessage,
   getOlderMessages,
   getWholeTranscript,
+  saveWorksheet,
   updateSessionMeta,
 } from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
@@ -127,6 +129,10 @@ function ChatScreen() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** ここまでの整理を開いているか、そして保存の途中か。 */
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [savingSheet, setSavingSheet] = useState(false);
+  const [sheetError, setSheetError] = useState<string | null>(null);
 
   /**
    * On a phone, Enter is 改行 and 送信 is the button — nothing else.
@@ -397,6 +403,9 @@ function ChatScreen() {
     setHidden(Math.max(0, (loaded?.messages.length ?? 0) - VISIBLE_STEP));
     setEditingId(null);
     setDeletingId(null);
+    // 別の壁打ちの整理を、前の壁打ちの整理として開いたままにしない。
+    setSheetOpen(false);
+    setSheetError(null);
     setStreaming("");
     setError(null);
     sheetRef.current = loaded?.session.worksheet ?? EMPTY_WORKSHEET;
@@ -595,6 +604,34 @@ function ChatScreen() {
       setError("発言を編集できませんでした。通信状況を確認して、もう一度お試しください。");
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  /**
+   * 学生が直した整理を保存する。
+   *
+   * ローカルの写しも同時に動かす。次の依頼に同封されるのは sheetRef のほうで、
+   * Firestoreに書けたのに送るものが古いままだと、直したはずの欄をAIがもう一度
+   * 上書きしてくる——学生から見れば「直しても戻る」になる。
+   */
+  const saveSheet = async (next: Worksheet) => {
+    if (!user || !session) return;
+    setSavingSheet(true);
+    setSheetError(null);
+    try {
+      await saveWorksheet(user.uid, session.id, next);
+      sheetRef.current = next;
+      setSession((prev) =>
+        prev && prev.id === session.id
+          ? { ...prev, worksheet: next, progress: worksheetProgress(next) }
+          : prev,
+      );
+      setSheetOpen(false);
+    } catch (e) {
+      console.error("[worksheet] 整理を保存できませんでした", e);
+      setSheetError("保存できませんでした。通信状況を確認して、もう一度お試しください。");
+    } finally {
+      setSavingSheet(false);
     }
   };
 
@@ -869,7 +906,14 @@ function ChatScreen() {
 
       {/* Directly under the header and outside the scroller, so 「あと何を話せば
           終わりなのか」 is answered without scrolling back up for it. */}
-      <ProgressRail steps={session.progress} accent={accent} />
+      <ProgressRail
+        steps={session.progress}
+        accent={accent}
+        onOpen={() => {
+          setSheetError(null);
+          setSheetOpen(true);
+        }}
+      />
 
       {/* transcript */}
       <div
@@ -1176,6 +1220,25 @@ function ChatScreen() {
           )}
         </div>
       </div>
+
+      {sheetOpen && (
+        <WorksheetPanel
+          worksheet={session.worksheet}
+          accent={accent}
+          // 返答を書いている最中は読むだけ。いま飛んでいる依頼は古いシートで
+          // 組み立てられていて、その返答が着いたときに上書きされる——直した
+          // つもりのものが数秒後に戻るくらいなら、直せないほうがまだ正直。
+          readOnly={thinking}
+          saving={savingSheet}
+          error={sheetError}
+          onSave={(next) => void saveSheet(next)}
+          onClose={() => {
+            if (savingSheet) return;
+            setSheetOpen(false);
+            setSheetError(null);
+          }}
+        />
+      )}
 
       {deletingId && (
         <MessageDeleteDialog
