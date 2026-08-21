@@ -701,7 +701,14 @@ function ChatScreen() {
     // The placeholder is not a name; the student's opening line is a better
     // one for the history list. Only ever replaced once — a title they went
     // and corrected by hand is not a placeholder any more.
-    if (session.title === PLACEHOLDER_TITLE) {
+    //
+    // Except when that opening line is one of the chips the AI just offered.
+    // 「まだ見つかっていない」 is a true answer to the first question and a
+    // useless name for the conversation: the 履歴 would fill with rows that all
+    // say the same thing, none of them about what was talked about. The
+    // placeholder waits one more turn instead.
+    const offered = messages[messages.length - 1]?.choices ?? [];
+    if (session.title === PLACEHOLDER_TITLE && !offered.includes(text)) {
       const title = titleFromFirstMessage(text);
       setSession({ ...session, title });
       void updateSessionMeta(user.uid, session.id, { title });

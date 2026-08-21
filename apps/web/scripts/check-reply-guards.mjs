@@ -37,6 +37,7 @@ import {
 import {
   buildChatSystemBlocks,
   buildChatSystemPrompt,
+  buildOpeningInstruction,
   FOCUS_PROTOCOL,
 } from "../prompts/modes/index.ts";
 
@@ -259,6 +260,18 @@ check(
 check(
   "動機の一段が書いてある",
   FOCUS_PROTOCOL.includes("なぜそうしようと思ったのですか"),
+);
+check(
+  "探索から始まる道が書いてある",
+  FOCUS_PROTOCOL.includes("phase が「探索」のあいだ") &&
+    FOCUS_PROTOCOL.includes("「深掘り」に切り替える"),
+);
+
+// 最初の一言は、話したいことが決まっていない学生にも入口がある形で出る。
+eq(
+  "始まりの二択がそのまま読める",
+  parseChoices(buildOpeningInstruction()),
+  ["話したいエピソードがある", "まだ見つかっていない"],
 );
 check(
   "毎回全部書けと書いてある",
