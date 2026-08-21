@@ -273,6 +273,32 @@ export async function appendMessage(
   return { id: ref.id, ...msg, createdAt: null };
 }
 
+/**
+ * Rename a 壁打ち — what ✎ in the 履歴 list writes.
+ *
+ * `updatedAt` is left alone, the same way saveProgress and markExtracted leave
+ * it. The list is ordered by it, so touching it would send the row the student
+ * has just renamed to the top of the screen they renamed it on — a conversation
+ * jumping position because its title was corrected is the app answering a
+ * question nobody asked. The date on the row means 「最後に話した日」, and giving
+ * a thread a better name is not talking to it.
+ *
+ * Titles are capped in firestore.rules at 200 characters; the field caps
+ * itself at the same number rather than letting the write be the thing that
+ * says no.
+ */
+export const TITLE_MAX_LENGTH = 200;
+
+export async function renameSession(
+  uid: string,
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  await updateDoc(sessionRef(uid, sessionId), {
+    title: title.slice(0, TITLE_MAX_LENGTH),
+  });
+}
+
 export async function updateSessionMeta(
   uid: string,
   sessionId: string,

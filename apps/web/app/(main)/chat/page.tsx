@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   defaultTheme,
   mergeProgress,
+  PLACEHOLDER_TITLE,
   readProgress,
   stripProgressMarkers,
   titleFromFirstMessage,
@@ -184,7 +185,7 @@ function ChatScreen() {
     (uid) =>
       openChat(uid, {
         resumeId,
-        fallback: { title: "新しい壁打ち", theme, mode: "counselor" },
+        fallback: { title: PLACEHOLDER_TITLE, theme, mode: "counselor" },
       }),
     {
       message: "壁打ちを読み込めませんでした。",
@@ -519,9 +520,10 @@ function ChatScreen() {
     const next = [...messages, saved];
     setMessages(next);
 
-    // 「新しい壁打ち」 is a placeholder; the student's opening line is a better
-    // name for it in the history list.
-    if (session.title === "新しい壁打ち") {
+    // The placeholder is not a name; the student's opening line is a better
+    // one for the history list. Only ever replaced once — a title they went
+    // and corrected by hand is not a placeholder any more.
+    if (session.title === PLACEHOLDER_TITLE) {
       const title = titleFromFirstMessage(text);
       setSession({ ...session, title });
       void updateSessionMeta(user.uid, session.id, { title });
