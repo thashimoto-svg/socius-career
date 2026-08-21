@@ -166,6 +166,22 @@ body {
   }
 }
 
+/*
+  The floor iOS needs on anything typed into.
+
+  Safari zooms the page when a focused field's text is under 16px, and leaves
+  it zoomed afterwards — the 「入力時に勝手に拡大される」 report (β 8/18). Every
+  field in the app sets its size inline through fieldFs() in lib/theme.ts,
+  which wins over this rule; this is the backstop for the next field somebody
+  adds without it. Checkboxes and radios are excluded because they hold no text
+  to zoom towards, and a font size on them changes their box.
+*/
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+select {
+  font-size: max(16px, calc(12.5px * var(--sc-font-scale, 1)));
+}
+
 /* Shippori Mincho — used for display headings and student's own words. */
 .sc-display {
   font-family: var(--font-sc-display), "Shippori Mincho", serif;

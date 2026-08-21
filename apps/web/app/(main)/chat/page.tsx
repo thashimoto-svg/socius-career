@@ -35,7 +35,7 @@ import { startChat } from "@/lib/new-chat";
 import { useLoadable } from "@/lib/use-loadable";
 import { PHYSICAL_KEYBOARD_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { ApiError, postStream } from "@/lib/api-client";
-import { fs, T } from "@/lib/theme";
+import { fieldFs, fs, T } from "@/lib/theme";
 
 export default function ChatPage() {
   // useSearchParams needs a boundary for the shell to be prerendered.
@@ -765,7 +765,9 @@ function ChatScreen() {
               padding: "11px 14px",
               borderRadius: 12,
               border: `1.5px solid ${T.line}`,
-              fontSize: fs(12.5),
+              // fieldFs, not fs: under 16px iOS zooms the whole app in the
+              // moment this takes focus, and never zooms back out.
+              fontSize: fieldFs(12.5),
               lineHeight: 1.6,
               color: T.ink,
               background: T.bg,
