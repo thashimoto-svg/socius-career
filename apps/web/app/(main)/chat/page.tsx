@@ -183,6 +183,18 @@ function ChatScreen() {
    */
   const inFlight = useRef<AbortController | null>(null);
 
+  /**
+   * Which 壁打ち is on screen right now.
+   *
+   * A turn takes seconds and switching threads takes one tap, so a reply can
+   * land after the student has moved on. It is saved to the conversation that
+   * asked for it either way — `sessionId` is a parameter, not read from
+   * state — but everything the *screen* does with it has to be checked against
+   * this first. Without it, A's reply was appended to B's transcript on screen,
+   * and B's next request was built from a line that is not in B.
+   */
+  const shownId = useRef<string | null>(null);
+
   // The 節 the conversation has covered, mirrored out of the session so the
   // reply handler can merge into it. A ref rather than a dependency: taking the
   // session would rebuild requestReply on every turn, and the effect that opens
@@ -212,6 +224,10 @@ function ChatScreen() {
       if (!user) return;
       const controller = new AbortController();
       inFlight.current = controller;
+      // Whether this turn is still the one the screen is showing. Checked after
+      // every await, because each of them is long enough for the student to
+      // have gone somewhere else.
+      const onScreen = () => shownId.current === sessionId;
       setThinking(true);
       setError(null);
       setFailedTurn(null);
@@ -226,7 +242,7 @@ function ChatScreen() {
             profile,
             messages: transcript.map((m) => ({ role: m.role, text: m.text })),
           },
-          (delta) => setStreaming((prev) => prev + delta),
+          (delta) => onScreen() && setStreaming((prev) => prev + delta),
           controller.signal,
         );
 
@@ -252,8 +268,13 @@ function ChatScreen() {
           text,
           mode: tone,
         });
-        fresh.current.add(saved.id);
-        setMessages((prev) => [...prev, saved]);
+        // Written to Firestore regardless — the conversation that asked for
+        // this reply gets it whether or not anyone is looking. Only the screen
+        // is conditional.
+        if (onScreen()) {
+          fresh.current.add(saved.id);
+          setMessages((prev) => [...prev, saved]);
+        }
 
         const merged = mergeProgress(progressRef.current, steps);
         if (merged.length !== progressRef.current.length) {
@@ -270,6 +291,12 @@ function ChatScreen() {
           );
         }
       } catch (e) {
+        if (!onScreen()) {
+          // A failure in a conversation the student has left. Logged, because
+          // 再送 would be a button on somebody else's screen.
+          console.error("[chat] 離れた壁打ちの返答に失敗しました", e);
+          return;
+        }
         setError(e instanceof Error ? e.message : "応答に失敗しました。");
         // 再送 only where sending it again could work. The daily cap will fail
         // the same way until the date changes, and a button that promises
@@ -283,8 +310,13 @@ function ChatScreen() {
         // turn's controller from an older turn's finally would leave 停止 with
         // nothing to pull.
         if (inFlight.current === controller) inFlight.current = null;
-        setThinking(false);
-        setStreaming("");
+        // The screen belongs to whatever is on it now. A turn that outlived
+        // the conversation it was asked in must not take 「考えています…」 away
+        // from the one that replaced it.
+        if (onScreen()) {
+          setThinking(false);
+          setStreaming("");
+        }
       }
     },
     [user, profile],
@@ -327,10 +359,33 @@ function ChatScreen() {
     // Switching threads from the drawer would otherwise leave the previous
     // conversation on screen under the new session's header until its
     // transcript arrived.
+    // Before anything else: a turn still in flight for the previous 壁打ち
+    // checks this to know it is no longer the conversation on screen.
+    const left = shownId.current !== null && shownId.current !== (loaded?.session.id ?? null);
+    shownId.current = loaded?.session.id ?? null;
+
+    if (left) {
+      // The reply being written for the conversation just left is cut off, the
+      // same way 停止 cuts one off: whatever had arrived is saved to the 壁打ち
+      // it belongs to, and nothing is spent generating the rest of an answer
+      // nobody is going to read.
+      //
+      // Guarded on the session having actually changed, not run every time this
+      // effect does. React mounts every component twice in development and both
+      // runs see the same loaded value — an unguarded abort here would have the
+      // second run kill the opening line the first run just asked for, and
+      // `primed` would then refuse to ask again.
+      inFlight.current?.abort();
+      inFlight.current = null;
+      setThinking(false);
+    }
+
     setSession(loaded?.session ?? null);
     setMessages(loaded?.messages ?? []);
     setComplete(loaded?.complete ?? true);
     setHidden(Math.max(0, (loaded?.messages.length ?? 0) - VISIBLE_STEP));
+    setEditingId(null);
+    setDeletingId(null);
     setStreaming("");
     setError(null);
     progressRef.current = loaded?.session.progress ?? [];
