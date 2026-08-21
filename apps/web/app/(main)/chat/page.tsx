@@ -12,6 +12,7 @@ import {
 import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
+import { CopyMessageButton, MessageActions } from "@/components/MessageActions";
 import { ProgressRail } from "@/components/ProgressRail";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
@@ -700,6 +701,15 @@ function ChatScreen() {
               <Bubble who={m.role} mode={m.mode ?? mode} fade={fresh.current.has(m.id)}>
                 {m.text}
               </Bubble>
+              {/* Only under the student's own lines. 「自分の発言をコピー」 is
+                  about getting their own words back out of the app — into an
+                  ES, a document, a notes app — which is the whole point of
+                  having said them here. */}
+              {m.role === "user" && (
+                <MessageActions>
+                  <CopyMessageButton text={m.text} />
+                </MessageActions>
+              )}
               {/* Every AD_INTERVAL messages, and never under the last one —
                   see adSlotFollows. The index keeps successive slots from
                   being the same card three times down one conversation. */}
