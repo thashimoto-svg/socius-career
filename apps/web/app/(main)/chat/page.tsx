@@ -25,6 +25,8 @@ import type { ProgressStep } from "@socius/prompts";
 import {
   openChat,
   appendMessage,
+  getOlderMessages,
+  getWholeTranscript,
   saveProgress,
   updateSessionMeta,
 } from "@/lib/firebase/sessions";
@@ -42,6 +44,28 @@ export default function ChatPage() {
     </Suspense>
   );
 }
+
+/**
+ * How many bubbles are on screen when a 壁打ち opens.
+ *
+ * Reading the transcript is not what made re-opening a long conversation slow;
+ * drawing it was. Every bubble carries the `sc-fade` entrance, so a hundred of
+ * them meant a hundred simultaneous animations on a phone, under a smooth
+ * scroll travelling the whole length of the thread to reach the bottom.
+ *
+ * A student re-opening a 壁打ち is there to continue it, so the end is what
+ * they need drawn. The rest is one tap away and costs nothing until it is
+ * asked for.
+ */
+const VISIBLE_STEP = 40;
+
+/**
+ * How close to the bottom still counts as being at the bottom.
+ *
+ * A reply arriving while the student is reading back through the conversation
+ * must not yank them to the end of it.
+ */
+const NEAR_BOTTOM_PX = 120;
 
 function ChatScreen() {
   const router = useRouter();
@@ -70,6 +94,11 @@ function ChatScreen() {
     theme: string;
   } | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
+  /** False when older lines exist above what has been read. */
+  const [complete, setComplete] = useState(true);
+  /** How many of the loaded lines are folded away above the visible ones. */
+  const [hidden, setHidden] = useState(0);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const profile = userDoc?.profile ?? null;
   // The session document is the only source of truth for the tone, so there is
@@ -80,6 +109,28 @@ function ChatScreen() {
   const theme = defaultTheme(profile);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Whether the first paint of this 壁打ち has happened.
+   *
+   * The jump to the bottom on open has to be instant. Smooth means animating
+   * the length of the whole transcript, which on a conversation of any size is
+   * seconds of the screen scrolling past on its own before it settles — and
+   * what the student sees while it does is the beginning of a thread they
+   * opened to continue.
+   */
+  const settled = useRef(false);
+
+  /**
+   * Lines that arrived while this screen was open.
+   *
+   * The entrance animation belongs to a message appearing, not to a message
+   * being present: it is how a new turn announces itself. Playing it for every
+   * line of a transcript that was already there is the same animation used to
+   * say something it is not true.
+   */
+  const fresh = useRef(new Set<string>());
 
   // The 節 the conversation has covered, mirrored out of the session so the
   // reply handler can merge into it. A ref rather than a dependency: taking the
@@ -143,6 +194,7 @@ function ChatScreen() {
           text,
           mode: tone,
         });
+        fresh.current.add(saved.id);
         setMessages((prev) => [...prev, saved]);
 
         const merged = mergeProgress(progressRef.current, steps);
@@ -203,9 +255,15 @@ function ChatScreen() {
     // transcript arrived.
     setSession(loaded?.session ?? null);
     setMessages(loaded?.messages ?? []);
+    setComplete(loaded?.complete ?? true);
+    setHidden(Math.max(0, (loaded?.messages.length ?? 0) - VISIBLE_STEP));
     setStreaming("");
     setError(null);
     progressRef.current = loaded?.session.progress ?? [];
+    // A different conversation is a different first paint: it lands at the
+    // bottom without animating, and none of its lines are new.
+    settled.current = false;
+    fresh.current.clear();
 
     if (!loaded || loaded.messages.length > 0) return;
     if (primed.current.has(loaded.session.id)) return;
@@ -219,9 +277,33 @@ function ChatScreen() {
     );
   }, [opened.data]);
 
+  /** Whether the student is reading the end of the conversation right now. */
+  const atBottom = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  }, []);
+
+  // Keyed on the last message rather than on the array: loading older lines
+  // grows `messages` at the *front*, and following that to the bottom would
+  // throw the student back out of the part of the thread they just asked to
+  // see.
+  const lastId = messages.length > 0 ? messages[messages.length - 1].id : null;
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, thinking, streaming]);
+    bottomRef.current?.scrollIntoView({ behavior: settled.current ? "smooth" : "auto" });
+    settled.current = true;
+  }, [lastId, thinking]);
+
+  // A reply lands a few characters at a time, and 「smooth」 on each of them is
+  // a new scroll animation per token — the single most expensive thing this
+  // screen does. Instant, and only while the student is actually at the end:
+  // scrolling back to re-read something mid-reply must not be undone by the
+  // next token.
+  useEffect(() => {
+    if (!streaming || !atBottom()) return;
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [streaming, atBottom]);
 
   // The keyboard opening takes about half the transcript away, and what it
   // takes is the bottom half — the last thing the AI asked. The shell resizing
@@ -239,6 +321,42 @@ function ChatScreen() {
     visual.addEventListener("resize", stayAtBottom);
     return () => visual.removeEventListener("resize", stayAtBottom);
   }, []);
+
+  /**
+   * Show more of the conversation — 「以前のメッセージを読み込む」.
+   *
+   * One control for two things that look identical from the outside: unfolding
+   * lines that were read but not drawn, and fetching the page above them once
+   * there are none left. The student is asking to see further back either way,
+   * and which side of that line they are on is not their problem.
+   */
+  const revealOlder = async () => {
+    if (hidden > 0) {
+      setHidden((n) => Math.max(0, n - VISIBLE_STEP));
+      return;
+    }
+    if (complete || loadingOlder || !user || !session) return;
+
+    const oldest = messages[0]?.createdAt;
+    // A message still carrying a pending server timestamp has nothing to
+    // cursor on; it is also, by definition, the newest thing here.
+    if (!oldest) return;
+
+    setLoadingOlder(true);
+    try {
+      const page = await getOlderMessages(user.uid, session.id, oldest);
+      setMessages((prev) => [...page.messages, ...prev]);
+      setComplete(page.complete);
+      // The page arrives above what is on screen; one step of it is unfolded
+      // and the rest waits, exactly as it does on open.
+      setHidden(Math.max(0, page.messages.length - VISIBLE_STEP));
+    } catch (e) {
+      console.error("[chat] 以前のメッセージを読み込めませんでした", e);
+      setError("以前のメッセージを読み込めませんでした。もう一度お試しください。");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   const send = async () => {
     const text = draft.trim();
@@ -261,6 +379,7 @@ function ChatScreen() {
       return;
     }
 
+    fresh.current.add(saved.id);
     const next = [...messages, saved];
     setMessages(next);
 
@@ -278,13 +397,14 @@ function ChatScreen() {
   // What automatic extraction reads, kept in a ref so the visibility listener
   // below can stay registered once instead of being torn down and rebuilt on
   // every message.
-  const current = useRef<{ session: Session | null; messages: Message[] }>({
-    session: null,
-    messages: [],
-  });
+  const current = useRef<{
+    session: Session | null;
+    messages: Message[];
+    complete: boolean;
+  }>({ session: null, messages: [], complete: true });
   useEffect(() => {
-    current.current = { session, messages };
-  }, [session, messages]);
+    current.current = { session, messages, complete };
+  }, [session, messages, complete]);
 
   /**
    * Hand the 壁打ち being left over to the background extractor.
@@ -294,21 +414,37 @@ function ChatScreen() {
    */
   const handOff = useCallback(
     (minNew: number) => {
-      const { session: leaving, messages: transcript } = current.current;
-      if (!leaving || !hasNewMaterial(leaving, transcript, minNew)) return;
+      const { session: leaving, messages: transcript, complete } = current.current;
+      if (!leaving || !user) return;
 
-      startExtraction({
-        session: leaving,
-        messages: transcript,
-        onRead: (extractedCount) =>
-          // Only if this screen is still showing the same 壁打ち — by the time
-          // this lands, the student is usually looking at a different one.
-          setSession((prev) =>
-            prev && prev.id === leaving.id ? { ...prev, extractedCount } : prev,
-          ),
-      });
+      const hand = (full: Message[]) => {
+        if (!hasNewMaterial(leaving, full, minNew)) return;
+        startExtraction({
+          session: leaving,
+          messages: full,
+          onRead: (extractedCount) =>
+            // Only if this screen is still showing the same 壁打ち — by the time
+            // this lands, the student is usually looking at a different one.
+            setSession((prev) =>
+              prev && prev.id === leaving.id ? { ...prev, extractedCount } : prev,
+            ),
+        });
+      };
+
+      // What is on screen is the end of the conversation, which is the right
+      // thing to *read* and the wrong thing to extract from: `extractedCount`
+      // counts lines from the beginning, and a STAR card needs the situation
+      // as well as the result. So a truncated view fetches the rest first.
+      // Nobody is waiting on this — it runs after the student has left.
+      if (complete) {
+        hand(transcript);
+        return;
+      }
+      void getWholeTranscript(user.uid, leaving.id)
+        .then(hand)
+        .catch((e) => console.error("[extraction] 全文を読み込めませんでした", e));
     },
-    [startExtraction],
+    [startExtraction, user],
   );
 
   /**
@@ -405,6 +541,7 @@ function ChatScreen() {
 
       {/* transcript */}
       <div
+        ref={scrollerRef}
         style={{
           flex: 1,
           minHeight: 0,
@@ -421,25 +558,57 @@ function ChatScreen() {
           forever, and it is gone (MTG 7/30). If the two tones need a note to
           tell them apart, the note is not the thing to fix.
         */}
-        {messages.map((m, i) => (
-          // Fragment rather than a wrapper, so the bubbles stay siblings and
-          // nothing about the transcript's layout depends on whether a slot
-          // happens to fall here.
-          <Fragment key={m.id}>
-            <Bubble who={m.role} mode={m.mode ?? mode}>
-              {m.text}
-            </Bubble>
-            {/* Every AD_INTERVAL messages, and never under the last one —
-                see adSlotFollows. The index keeps successive slots from
-                being the same card three times down one conversation. */}
-            {adSlotFollows(i, messages.length) && (
-              <AdSlot index={Math.floor(i / AD_INTERVAL)} />
-            )}
-          </Fragment>
-        ))}
+        {/* Only when there is something above. The button says 読み込む either
+            way, because whether the next lines are already in memory or still
+            in Firestore is not a distinction the student made. */}
+        {(hidden > 0 || !complete) && (
+          <button
+            type="button"
+            onClick={() => void revealOlder()}
+            disabled={loadingOlder}
+            style={{
+              display: "block",
+              margin: "0 auto 14px",
+              padding: "7px 18px",
+              borderRadius: 999,
+              border: `1px solid ${T.line}`,
+              background: T.paper,
+              color: T.sub,
+              fontSize: fs(11),
+              fontWeight: 700,
+              opacity: loadingOlder ? 0.5 : 1,
+              cursor: loadingOlder ? "default" : "pointer",
+            }}
+          >
+            {loadingOlder ? "読み込んでいます…" : "以前のメッセージを読み込む"}
+          </button>
+        )}
+
+        {/* Sliced from `hidden` rather than mapped whole, but indexed against
+            the full transcript: an ad slot's place in a conversation is where
+            it falls in the conversation, not where it falls in today's view. */}
+        {messages.slice(hidden).map((m, j) => {
+          const i = hidden + j;
+          return (
+            // Fragment rather than a wrapper, so the bubbles stay siblings and
+            // nothing about the transcript's layout depends on whether a slot
+            // happens to fall here.
+            <Fragment key={m.id}>
+              <Bubble who={m.role} mode={m.mode ?? mode} fade={fresh.current.has(m.id)}>
+                {m.text}
+              </Bubble>
+              {/* Every AD_INTERVAL messages, and never under the last one —
+                  see adSlotFollows. The index keeps successive slots from
+                  being the same card three times down one conversation. */}
+              {adSlotFollows(i, messages.length) && (
+                <AdSlot index={Math.floor(i / AD_INTERVAL)} />
+              )}
+            </Fragment>
+          );
+        })}
 
         {thinking && (
-          <Bubble who="ai" mode={mode}>
+          <Bubble who="ai" mode={mode} fade>
             {/* Markers are stripped on the way to the screen as well as on the
                 way to Firestore: a reply is rendered while it is still being
                 written, so 「[progress:situation]」 would otherwise be on screen

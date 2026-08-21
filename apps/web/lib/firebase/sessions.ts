@@ -8,9 +8,13 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  startAfter,
+  Timestamp,
   updateDoc,
   where,
   deleteDoc,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import {
   messagesRef,
@@ -89,17 +93,101 @@ export async function getOrCreateOpenSession(
   return createSession(uid, fallback);
 }
 
+/**
+ * How many lines of a 壁打ち are read at once.
+ *
+ * This used to be a `limit(200)` on an ascending query, which is not a cap on
+ * how much is read so much as a decision about *which* 200 — and it picked the
+ * wrong end. A conversation longer than the cap opened on its first 200 lines
+ * with everything recent invisible, and the student was left looking at the
+ * opening of a thread they came back to continue.
+ *
+ * Read from the newest end and turned round, so the cap now takes the part of
+ * the conversation that is actually being continued. What is above it is
+ * reachable through `getOlderMessages`.
+ */
+export const TRANSCRIPT_PAGE = 60;
+
+/**
+ * Enough of a 壁打ち to carry on with, and whether that is all of it.
+ *
+ * `complete` is what stops the tail being mistaken for the whole thing.
+ * `extractedCount` counts transcript lines from the beginning, so anything
+ * that does arithmetic against it — 自分史 extraction, in practice — has to
+ * know when it is holding a slice rather than the conversation.
+ */
+export type Transcript = { messages: Message[]; complete: boolean };
+
+function toTranscript(
+  docs: QueryDocumentSnapshot<DocumentData>[],
+  page: number,
+): Transcript {
+  // One more than the page was asked for, so "is there anything above this"
+  // is answered by the read that was happening anyway rather than by a second
+  // query for a question with a one-word answer.
+  const kept = docs.slice(0, page).reverse();
+  return {
+    messages: kept.map((d) => toMessage(d.id, d.data())),
+    complete: docs.length <= page,
+  };
+}
+
+/** The newest `page` lines, oldest-first — the order they are read in. */
 export async function getSessionMessages(
   uid: string,
   sessionId: string,
-): Promise<Message[]> {
+  page: number = TRANSCRIPT_PAGE,
+): Promise<Transcript> {
   const snap = await getDocs(
-    query(messagesRef(uid, sessionId), orderBy("createdAt", "asc"), limit(200)),
+    query(messagesRef(uid, sessionId), orderBy("createdAt", "desc"), limit(page + 1)),
   );
-  return snap.docs.map((d) => toMessage(d.id, d.data()));
+  return toTranscript(snap.docs, page);
 }
 
-export type OpenedChat = { session: Session; messages: Message[] };
+/**
+ * The page above `before` — what 「以前のメッセージを読み込む」 asks for.
+ *
+ * Cursored on the timestamp rather than on a document snapshot, because what
+ * the screen is holding is a `Message`, and keeping the snapshots alive
+ * alongside it would mean a second copy of the transcript in memory for the
+ * sake of a field that is already on the first.
+ */
+export async function getOlderMessages(
+  uid: string,
+  sessionId: string,
+  before: Date,
+  page: number = TRANSCRIPT_PAGE,
+): Promise<Transcript> {
+  const snap = await getDocs(
+    query(
+      messagesRef(uid, sessionId),
+      orderBy("createdAt", "desc"),
+      startAfter(Timestamp.fromDate(before)),
+      limit(page + 1),
+    ),
+  );
+  return toTranscript(snap.docs, page);
+}
+
+/**
+ * The whole transcript, however long it is.
+ *
+ * Only for 自分史 extraction, which needs the situation and the result and
+ * cannot be handed the tail the screen happens to be showing. It runs in the
+ * background where nobody is waiting, so the read it costs is affordable in a
+ * way it would not be on the path to first paint.
+ */
+const WHOLE_TRANSCRIPT_LIMIT = 2000;
+
+export async function getWholeTranscript(
+  uid: string,
+  sessionId: string,
+): Promise<Message[]> {
+  const { messages } = await getSessionMessages(uid, sessionId, WHOLE_TRANSCRIPT_LIMIT);
+  return messages;
+}
+
+export type OpenedChat = Transcript & { session: Session };
 
 /**
  * Everything the 壁打ち screen needs to start rendering: which conversation to
@@ -117,13 +205,26 @@ export async function openChat(
     fallback: { title: string; theme: string; mode: ChatMode };
   },
 ): Promise<OpenedChat> {
-  const session =
+  // When the URL names a 壁打ち the two reads have no order between them: the
+  // id is already known, and nothing in the session document decides which
+  // messages belong to it. They used to run end to end under a single 10s
+  // deadline, which is the shape that turns a slow phone into 「壁打ちを読み込
+  // めませんでした」 — two round trips against one budget, on the screen with
+  // the most to fetch.
+  if (opts.resumeId) {
+    const [session, transcript] = await Promise.all([
+      resumeById(uid, opts.resumeId),
+      getSessionMessages(uid, opts.resumeId),
+    ]);
     // A link to a session that no longer exists falls through to the normal
-    // path rather than stranding the student on a blank screen.
-    (opts.resumeId ? await resumeById(uid, opts.resumeId) : null) ??
-    (await getOrCreateOpenSession(uid, opts.fallback));
+    // path rather than stranding the student on a blank screen. The transcript
+    // read is wasted in that case, and it is a read against a collection that
+    // is also gone.
+    if (session) return { session, ...transcript };
+  }
 
-  return { session, messages: await getSessionMessages(uid, session.id) };
+  const session = await getOrCreateOpenSession(uid, opts.fallback);
+  return { session, ...(await getSessionMessages(uid, session.id)) };
 }
 
 /**

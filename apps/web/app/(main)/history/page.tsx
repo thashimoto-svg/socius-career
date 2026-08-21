@@ -49,6 +49,13 @@ export default function HistoryPage() {
         <Link
           key={s.id}
           href={`/chat?s=${s.id}`}
+          // Every row points at the same screen with a different 壁打ち in the
+          // query, so the automatic prefetch is one request per row — up to
+          // fifty of them, on a phone, for a list where the student is going to
+          // open exactly one. The route itself is already in the bundle; what
+          // the prefetch buys is nothing, and what it costs is the list feeling
+          // slow to scroll.
+          prefetch={false}
           className="sc-fade"
           style={{
             display: "block",
