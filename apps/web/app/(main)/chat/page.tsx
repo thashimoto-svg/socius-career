@@ -159,6 +159,16 @@ function ChatScreen() {
    */
   const fresh = useRef(new Set<string>());
 
+  /**
+   * The turn being generated right now, so it can be cut off.
+   *
+   * Aborting the fetch closes the connection, and /api/chat watches
+   * `request.signal` — so 停止 stops the model rather than only stopping the
+   * screen from showing what it says. The tokens spent up to that point are
+   * still recorded there; they were still generated.
+   */
+  const inFlight = useRef<AbortController | null>(null);
+
   // The 節 the conversation has covered, mirrored out of the session so the
   // reply handler can merge into it. A ref rather than a dependency: taking the
   // session would rebuild requestReply on every turn, and the effect that opens
@@ -186,6 +196,8 @@ function ChatScreen() {
   const requestReply = useCallback(
     async (sessionId: string, transcript: Message[], tone: ChatMode, theme: string) => {
       if (!user) return;
+      const controller = new AbortController();
+      inFlight.current = controller;
       setThinking(true);
       setError(null);
       setFailedTurn(null);
@@ -201,6 +213,7 @@ function ChatScreen() {
             messages: transcript.map((m) => ({ role: m.role, text: m.text })),
           },
           (delta) => setStreaming((prev) => prev + delta),
+          controller.signal,
         );
 
         // The progress markers come off here, before anything is written down.
@@ -209,6 +222,10 @@ function ChatScreen() {
         // has to get the stripping right.
         const { text, steps } = readProgress(raw);
         if (!text) {
+          // 停止 pressed before anything arrived. Nothing was said, so there is
+          // nothing to write down and nothing to apologise for — the student
+          // asked for this and the composer is already theirs again.
+          if (controller.signal.aborted) return;
           // A reply that was nothing but markers. Retryable, because it is the
           // model having a bad turn rather than anything about this student.
           throw new ApiError(502, "返答を受け取れませんでした。もう一度お試しください。");
@@ -247,12 +264,28 @@ function ChatScreen() {
           setFailedTurn({ sessionId, transcript, tone, theme });
         }
       } finally {
+        // Only if this is still the turn in flight. A stopped turn is followed
+        // immediately by whatever the student does next, and clearing a newer
+        // turn's controller from an older turn's finally would leave 停止 with
+        // nothing to pull.
+        if (inFlight.current === controller) inFlight.current = null;
         setThinking(false);
         setStreaming("");
       }
     },
     [user, profile],
   );
+
+  /**
+   * 停止 — cut the reply off where it is.
+   *
+   * What has already been said is kept: postStream returns the partial text
+   * instead of throwing, and it is saved to Firestore like any other reply.
+   * Discarding it would be the tidier code and the worse conversation — the
+   * student read those lines, and a transcript that does not contain them is
+   * one the next turn cannot refer back to.
+   */
+  const stopReply = () => inFlight.current?.abort();
 
   // The opening line needs the current tone and profile, but neither may be a
   // dependency of the effect below: a new identity for either would re-open the
@@ -840,27 +873,62 @@ function ChatScreen() {
               fontFamily: "inherit",
             }}
           />
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={!draft.trim() || thinking}
-            aria-label="送信"
-            style={{
-              width: 40,
-              height: 40,
-              flexShrink: 0,
-              borderRadius: 12,
-              border: "none",
-              background: accent,
-              color: T.onAccent,
-              fontSize: fs(15),
-              fontWeight: 700,
-              opacity: draft.trim() && !thinking ? 1 : 0.45,
-              cursor: draft.trim() && !thinking ? "pointer" : "default",
-            }}
-          >
-            ↑
-          </button>
+          {/*
+            One button, two jobs, because they are never both available: while
+            a reply is being written there is nothing to send, and the only
+            thing the student can usefully do to the app is tell it to stop. A
+            second button beside 送信 would sit there greyed out for the whole
+            of every other moment.
+          */}
+          {thinking ? (
+            <button
+              type="button"
+              onClick={stopReply}
+              aria-label="生成を停止"
+              style={{
+                width: 40,
+                height: 40,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 12,
+                border: `1.5px solid ${T.line}`,
+                background: T.paper,
+                color: T.ink,
+                cursor: "pointer",
+              }}
+            >
+              {/* A square, which is what 停止 has looked like since cassette
+                  decks. A ✕ would read as 取り消し — as though the lines
+                  already on screen were about to be taken back. */}
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                <rect width="12" height="12" rx="2.5" fill="currentColor" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void send()}
+              disabled={!draft.trim()}
+              aria-label="送信"
+              style={{
+                width: 40,
+                height: 40,
+                flexShrink: 0,
+                borderRadius: 12,
+                border: "none",
+                background: accent,
+                color: T.onAccent,
+                fontSize: fs(15),
+                fontWeight: 700,
+                opacity: draft.trim() ? 1 : 0.45,
+                cursor: draft.trim() ? "pointer" : "default",
+              }}
+            >
+              ↑
+            </button>
+          )}
         </div>
       </div>
     </div>
