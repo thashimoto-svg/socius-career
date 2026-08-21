@@ -33,6 +33,7 @@ import {
 import { ToneMenu } from "@/components/ToneMenu";
 import { startChat } from "@/lib/new-chat";
 import { useLoadable } from "@/lib/use-loadable";
+import { PHYSICAL_KEYBOARD_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { ApiError, postStream } from "@/lib/api-client";
 import { fs, T } from "@/lib/theme";
 
@@ -58,6 +59,16 @@ export default function ChatPage() {
  * asked for.
  */
 const VISIBLE_STEP = 40;
+
+/**
+ * How tall the composer is allowed to grow before it scrolls instead.
+ *
+ * The box has to grow, or 「Enterで改行」 gives the student a second line they
+ * cannot see. It must not grow without limit either: the keyboard already has
+ * most of the screen, and a composer that keeps taking the rest would push the
+ * question being answered off the top of it.
+ */
+const COMPOSER_MAX_HEIGHT = 132;
 
 /**
  * How close to the bottom still counts as being at the bottom.
@@ -100,6 +111,20 @@ function ChatScreen() {
   const [hidden, setHidden] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
+  /**
+   * On a phone, Enter is 改行 and 送信 is the button — nothing else.
+   *
+   * 「スマホで改行できない」 (β報告). The box was an `<input>`, which has no
+   * second line to break to, inside a `<form>`, where Enter submits. Both
+   * halves of that had to go: a `<textarea>` so there is somewhere for the
+   * line to go, and no implicit submit so that pressing 改行 does not send.
+   *
+   * The desktop convention stays, because on a desktop it is the right one:
+   * Enter sends, Shift+Enter breaks the line. What decides which is in play is
+   * the input device, not the width of the window.
+   */
+  const enterSends = useMediaQuery(PHYSICAL_KEYBOARD_QUERY);
+
   const profile = userDoc?.profile ?? null;
   // The session document is the only source of truth for the tone, so there is
   // no local copy that could drift from what is saved.
@@ -110,6 +135,7 @@ function ChatScreen() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   /**
    * Whether the first paint of this 壁打ち has happened.
@@ -321,6 +347,32 @@ function ChatScreen() {
     visual.addEventListener("resize", stayAtBottom);
     return () => visual.removeEventListener("resize", stayAtBottom);
   }, []);
+
+  /**
+   * Enter, and what it means here.
+   *
+   * Three things have to be true at once before it sends: the student is on a
+   * real keyboard, they are not holding Shift, and — the one that is easy to
+   * forget in a Japanese app — the IME is not mid-conversion. Enter is how a
+   * candidate is *chosen*, so without the composition check every 漢字 the
+   * student picks would send the half-written sentence it was picked in.
+   */
+  const onComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey || !enterSends) return;
+    if (e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    void send();
+  };
+
+  // The box is one line tall until it is not. Measured rather than counted,
+  // because a wrapped line is a line too and the student never pressed 改行 for
+  // it.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  }, [draft]);
 
   /**
    * Show more of the conversation — 「以前のメッセージを読み込む」.
@@ -686,33 +738,48 @@ function ChatScreen() {
 
             sc-composer is what globals.css watches to know the keyboard is up:
             while the field inside here has focus, the tab bar is not drawn. */}
-        <form
+        <div
           className="sc-composer sc-readable"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-          style={{ display: "flex", gap: 8, alignItems: "center" }}
+          style={{ display: "flex", gap: 8, alignItems: "flex-end" }}
         >
-          <input
+          {/*
+            A div rather than a form. A form submits on Enter wherever the
+            caret is, which is exactly the behaviour being removed — and on a
+            phone there is no second key to press instead, so the student was
+            left with a box that could not hold a second line.
+          */}
+          <textarea
+            ref={composerRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onComposerKeyDown}
+            rows={1}
             placeholder="自分の言葉で書いてみる…"
             aria-label="メッセージ"
             style={{
               flex: 1,
               minWidth: 0,
+              // Grown to fit by the effect below; the cap is what makes it
+              // scroll rather than take the screen.
+              maxHeight: COMPOSER_MAX_HEIGHT,
               padding: "11px 14px",
               borderRadius: 12,
               border: `1.5px solid ${T.line}`,
               fontSize: fs(12.5),
+              lineHeight: 1.6,
               color: T.ink,
               background: T.bg,
               outline: "none",
+              // A textarea comes with a resize grabber and a scrollbar gutter
+              // that an input never had. Neither belongs on a chat composer.
+              resize: "none",
+              overflowY: "auto",
+              fontFamily: "inherit",
             }}
           />
           <button
-            type="submit"
+            type="button"
+            onClick={() => void send()}
             disabled={!draft.trim() || thinking}
             aria-label="送信"
             style={{
@@ -731,7 +798,7 @@ function ChatScreen() {
           >
             ↑
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );
