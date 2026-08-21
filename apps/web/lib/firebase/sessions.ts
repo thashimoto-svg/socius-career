@@ -1,4 +1,8 @@
-import type { ProgressStep } from "@socius/prompts";
+import {
+  EMPTY_WORKSHEET,
+  worksheetProgress,
+  type Worksheet,
+} from "@socius/prompts";
 import {
   addDoc,
   getDoc,
@@ -65,6 +69,10 @@ export async function createSession(
     episodeCount: 0,
     extractedCount: 0,
     progress: [],
+    // Not written to the document. An absent field and an empty sheet read the
+    // same way (toWorksheet), and a 壁打ち nobody has said anything in has
+    // nothing to write down yet.
+    worksheet: EMPTY_WORKSHEET,
     createdAt: null,
     updatedAt: null,
   };
@@ -279,7 +287,7 @@ export async function appendMessage(
 /**
  * Rename a 壁打ち — what ✎ in the 履歴 list writes.
  *
- * `updatedAt` is left alone, the same way saveProgress and markExtracted leave
+ * `updatedAt` is left alone, the same way saveWorksheet and markExtracted leave
  * it. The list is ordered by it, so touching it would send the row the student
  * has just renamed to the top of the screen they renamed it on — a conversation
  * jumping position because its title was corrected is the app answering a
@@ -376,19 +384,28 @@ export async function updateSessionMeta(
 }
 
 /**
- * Record which of the five 節 the conversation has now covered.
+ * 学生が直したシートを書き戻す。
  *
- * `updatedAt` is left alone on purpose, the same way markExtracted leaves it:
- * the reply that carried these markers has already moved it, and touching it
- * again from a second write would reorder the history list for a reason the
- * student did nothing to cause.
+ * サーバーにも同じことをする道がある(lib/server/worksheet.ts)。分かれているのは
+ * 誰が書いたかではなく、いつ書くか: あちらは返答を読み終えた直後、こちらは学生が
+ * シートを開いて保存を押した瞬間で、そのとき返答は流れていない。
+ *
+ * `progress` を一緒に書くのはあちらと同じ理由——レールはシートから導かれるので、
+ * 「行動」の欄を学生が消したのにレールが埋まったままなら、二つは同じものを指して
+ * いないことになる。
+ *
+ * `updatedAt` は触らない。markExtracted と同じ理由で、整理し直したことは
+ * 「最後に話した日」ではない。
  */
-export async function saveProgress(
+export async function saveWorksheet(
   uid: string,
   sessionId: string,
-  progress: ProgressStep[],
+  worksheet: Worksheet,
 ): Promise<void> {
-  await updateDoc(sessionRef(uid, sessionId), { progress });
+  await updateDoc(sessionRef(uid, sessionId), {
+    worksheet,
+    progress: worksheetProgress(worksheet),
+  });
 }
 
 /**

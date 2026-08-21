@@ -54,6 +54,20 @@ const DAY = "2026-08-12";
 const usagePath = (uid = ME) => `users/${uid}/usage/${DAY}`;
 const SESSION = "session-1";
 const msgPath = (id, uid = ME) => `users/${uid}/sessions/${SESSION}/messages/${id}`;
+const sessionPath = (uid = ME) => `users/${uid}/sessions/${SESSION}`;
+
+/** A sheet the rules should accept, as the server writes it. */
+const SHEET = {
+  phase: "深掘り",
+  episode: "居酒屋のホールでの2年間",
+  situation: "大学2年、週4回のホール",
+  task: "忙しい時間帯に注文が詰まっていた",
+  action: "ドリンク担当を固定する案を出した",
+  result: "提供時間が半分になった",
+  learning: "やってみせるのが早いと分かった",
+  motive: "困っている人がそのままなのが落ち着かない",
+  pending: ["高校の部活の話"],
+};
 
 let failures = 0;
 
@@ -80,6 +94,25 @@ async function seed(data) {
 async function fresh(data) {
   await env.clearFirestore();
   if (data) await seed(data);
+}
+
+/** Put a 壁打ち in place without going through the rules. */
+async function seedSession(data = {}) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), sessionPath()), {
+      title: "居酒屋の話",
+      theme: "アルバイトの経験",
+      mode: "counselor",
+      status: "open",
+      turnCount: 4,
+      episodeCount: 0,
+      extractedCount: 0,
+      progress: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...data,
+    });
+  });
 }
 
 /** Put a transcript line in place without going through the rules. */
@@ -293,6 +326,78 @@ await fresh();
 await seedMessage("m2", { role: "ai", text: "どんな部活でしたか?" });
 await ok("直後のAI応答も消せる(発言と応答は対で消える)", () =>
   assertSucceeds(deleteDoc(doc(mine(), msgPath("m2")))),
+);
+
+// ---------------------------------------------------------------------------
+console.log("\nエピソードシート — 二人が書く一枚");
+// ---------------------------------------------------------------------------
+
+/*
+  この欄はサーバー(app/api/chat が学生自身のIDトークンで REST 経由)と学生本人の
+  両方が書く。片方だけを信じられる経路が無いので、形の保証はルールにしかない。
+  中身は検閲しない——学生が話した内容がそのまま入る欄で、書ける値を絞る意味が
+  ないため。効いてほしいのは、見知らぬキーが増えないことと、青天井に伸びないこと。
+*/
+
+await fresh();
+await seedSession();
+await ok("シートを書ける", () =>
+  assertSucceeds(updateDoc(doc(mine(), sessionPath()), { worksheet: SHEET, progress: ["situation"] })),
+);
+
+await fresh();
+await seedSession();
+await ok("知らないキーは弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), { worksheet: { ...SHEET, evil: "true" } }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("1000字を超える欄は弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), {
+      worksheet: { ...SHEET, situation: "あ".repeat(1001) },
+    }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("未回収メモが7件は弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), {
+      worksheet: { ...SHEET, pending: ["1", "2", "3", "4", "5", "6", "7"] },
+    }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("シートがマップでないのは弾かれる", () =>
+  assertFails(updateDoc(doc(mine(), sessionPath()), { worksheet: "まるごと文字列" })),
+);
+
+await fresh();
+await seedSession();
+await ok("欄が文字列でないのは弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), { worksheet: { ...SHEET, episode: 7 } }),
+  ),
+);
+
+// シート以前の壁打ちは worksheet を持たない。持たないまま書き続けられること。
+await fresh();
+await seedSession();
+await ok("シートに触れない更新は通る(シート以前の壁打ち)", () =>
+  assertSucceeds(updateDoc(doc(mine(), sessionPath()), { title: "名前を変えた" })),
+);
+
+await fresh();
+await seedSession();
+await ok("他人のシートは書けない", () =>
+  assertFails(updateDoc(doc(theirs(), sessionPath(ME)), { worksheet: SHEET })),
 );
 
 await env.cleanup();

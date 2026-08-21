@@ -1,8 +1,10 @@
 import {
   EPISODE_PERIODS,
   toProgress,
+  toWorksheet,
   type EpisodePeriod,
   type ProgressStep,
+  type Worksheet,
 } from "@socius/prompts";
 import {
   collection,
@@ -80,6 +82,17 @@ export type Session = {
    * 履歴 screen displays, one missed strip away from the student seeing it.
    */
   progress: ProgressStep[];
+  /**
+   * エピソードシート — この壁打ちで分かっていることの、一枚の整理。
+   *
+   * 会話そのものとは別に持っている。送るのは直近16往復だけなので、それより前の
+   * 話はモデルの手元から消える——消えても残るものが要る、というのがこの欄で、
+   * だから毎ターン依頼に同封され、毎ターン書き直される。`progress` はここから
+   * 導かれた影で、レールが指しているものは必ずこの中に書いてある。
+   *
+   * 書くのはサーバー(返答から読み取ったもの)と学生本人(画面で直したもの)。
+   */
+  worksheet: Worksheet;
   createdAt: Date | null;
   updatedAt: Date | null;
 };
@@ -190,6 +203,10 @@ export function toSession(id: string, d: DocumentData): Session {
     // Sessions from before the rail existed read as empty, which is honest:
     // nothing was ever judged about them. They fill from their next reply.
     progress: toProgress(d.progress),
+    // Same for the sheet: a 壁打ち held before it existed opens with a blank
+    // one, and the first reply of the next turn fills it in from the transcript
+    // it can still see.
+    worksheet: toWorksheet(d.worksheet),
     createdAt: toDate(d.createdAt),
     updatedAt: toDate(d.updatedAt),
   };

@@ -4,11 +4,13 @@ import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from "re
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   defaultTheme,
-  mergeProgress,
+  EMPTY_WORKSHEET,
+  mergeWorksheet,
   PLACEHOLDER_TITLE,
-  readProgress,
-  stripProgressMarkers,
+  readReply,
+  stripReply,
   titleFromFirstMessage,
+  worksheetProgress,
 } from "@socius/prompts";
 import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
@@ -28,7 +30,7 @@ import { useAuth } from "@/lib/firebase/auth-context";
 import { AD_INTERVAL, adSlotFollows } from "@/lib/ads";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
 import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
-import type { ProgressStep } from "@socius/prompts";
+import type { Worksheet } from "@socius/prompts";
 import {
   openChat,
   appendMessage,
@@ -36,7 +38,6 @@ import {
   editUserMessage,
   getOlderMessages,
   getWholeTranscript,
-  saveProgress,
   updateSessionMeta,
 } from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
@@ -195,11 +196,16 @@ function ChatScreen() {
    */
   const shownId = useRef<string | null>(null);
 
-  // The 節 the conversation has covered, mirrored out of the session so the
-  // reply handler can merge into it. A ref rather than a dependency: taking the
-  // session would rebuild requestReply on every turn, and the effect that opens
-  // the conversation watches it.
-  const progressRef = useRef<ProgressStep[]>([]);
+  /**
+   * エピソードシート、返答ハンドラの手元の写し。
+   *
+   * A ref rather than a dependency: taking it off the session would rebuild
+   * requestReply on every turn, and the effect that opens the conversation
+   * watches that. It is also what is *sent* — the sheet travels with each
+   * request, so this has to be the same object the screen is showing, including
+   * whatever the student has just edited by hand.
+   */
+  const sheetRef = useRef<Worksheet>(EMPTY_WORKSHEET);
 
   // Which conversation to show: the one a link pointed at, otherwise the most
   // recent unfinished 壁打ち, otherwise a new one. Loaded the same way every
@@ -240,17 +246,22 @@ function ChatScreen() {
             mode: tone,
             theme,
             profile,
+            // The sheet goes up with the turn and comes back written on. The
+            // id goes with it because the writing back happens on the server —
+            // it is the side that has the reply before the tags come off.
+            sessionId,
+            worksheet: sheetRef.current,
             messages: transcript.map((m) => ({ role: m.role, text: m.text })),
           },
           (delta) => onScreen() && setStreaming((prev) => prev + delta),
           controller.signal,
         );
 
-        // The progress markers come off here, before anything is written down.
-        // Nothing downstream — the transcript, the 自分史 extraction, the next
-        // request's history — ever sees one, so there is exactly one place that
-        // has to get the stripping right.
-        const { text, steps } = readProgress(raw);
+        // The tags come off here, before anything is written down. Nothing
+        // downstream — the transcript, the 自分史 extraction, the next request's
+        // history — ever sees one, so there is exactly one place that has to
+        // get the stripping right.
+        const { text, sheet } = readReply(raw);
         if (!text) {
           // 停止 pressed before anything arrived. Nothing was said, so there is
           // nothing to write down and nothing to apologise for — the student
@@ -276,20 +287,18 @@ function ChatScreen() {
           setMessages((prev) => [...prev, saved]);
         }
 
-        const merged = mergeProgress(progressRef.current, steps);
-        if (merged.length !== progressRef.current.length) {
-          progressRef.current = merged;
-          setSession((prev) =>
-            prev && prev.id === sessionId ? { ...prev, progress: merged } : prev,
-          );
-          // Losing this costs the rail its memory the next time the 壁打ち is
-          // opened, and nothing else — the conversation is already saved. Not
-          // worth an error the student has to read, and not worth failing the
-          // turn over, so it is logged.
-          void saveProgress(user.uid, sessionId, merged).catch((e) =>
-            console.error("[progress] 進捗を保存できませんでした", e),
-          );
-        }
+        // The same merge the server just did, on the same two inputs, so the
+        // screen shows what was stored without waiting to be told. Not written
+        // from here: /api/chat saves the sheet as the side that read it whole,
+        // and two writers of one field is a way to lose a turn's work to a race
+        // nobody can see.
+        const merged = mergeWorksheet(sheetRef.current, sheet);
+        sheetRef.current = merged;
+        setSession((prev) =>
+          prev && prev.id === sessionId
+            ? { ...prev, worksheet: merged, progress: worksheetProgress(merged) }
+            : prev,
+        );
       } catch (e) {
         if (!onScreen()) {
           // A failure in a conversation the student has left. Logged, because
@@ -388,7 +397,7 @@ function ChatScreen() {
     setDeletingId(null);
     setStreaming("");
     setError(null);
-    progressRef.current = loaded?.session.progress ?? [];
+    sheetRef.current = loaded?.session.worksheet ?? EMPTY_WORKSHEET;
     // A different conversation is a different first paint: it lands at the
     // bottom without animating, and none of its lines are new.
     settled.current = false;
@@ -787,7 +796,7 @@ function ChatScreen() {
     }
   };
 
-  const streamed = stripProgressMarkers(streaming);
+  const streamed = stripReply(streaming);
 
   if (!session) {
     return opened.error ? (

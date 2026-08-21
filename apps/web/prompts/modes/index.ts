@@ -1,5 +1,6 @@
 import { blocksToText, type PromptBlock } from "../cache";
-import { PROGRESS_PROTOCOL } from "../progress";
+import { CHOICES_PROTOCOL } from "../choices";
+import { WORKSHEET_PROTOCOL } from "../worksheet";
 import { INVARIANT_CORE, profileBlock, type PromptProfile } from "./core";
 import { TONES, type ToneId } from "./tones";
 
@@ -43,13 +44,24 @@ export function buildChatSystemBlocks(opts: {
 
   return [
     {
-      // The progress protocol belongs in here rather than in the per-student
-      // block below: it is byte-identical for the whole cohort on both tones,
-      // so it rides the cache that is already warm instead of paying for
-      // itself on every conversation. Last, because it is the one thing in
-      // this block that is not about how to talk to the student.
+      // The two output protocols belong in here rather than in the
+      // per-student block below: they are byte-identical for the whole cohort
+      // on both tones, so they ride the cache that is already warm instead of
+      // paying for themselves on every conversation. Last, because they are
+      // the one thing in this block that is not about how to talk to the
+      // student.
+      //
+      // The sheet itself is not here. Its *rules* never change; its contents
+      // change every turn, and a block that changes every turn cannot sit in
+      // front of a cached prefix without invalidating it — so the sheet
+      // travels at the end of the request instead (see toAnthropicMessages).
       type: "text",
-      text: `${INVARIANT_CORE}\n\n${TONES[opts.mode].instruction}\n\n${PROGRESS_PROTOCOL}`,
+      text: [
+        INVARIANT_CORE,
+        TONES[opts.mode].instruction,
+        CHOICES_PROTOCOL,
+        WORKSHEET_PROTOCOL,
+      ].join("\n\n"),
       cache_control: { type: "ephemeral" },
     },
     {

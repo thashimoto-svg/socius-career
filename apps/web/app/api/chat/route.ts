@@ -3,6 +3,10 @@ import type { TextBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import {
   buildChatSystemBlocks,
   buildOpeningInstruction,
+  mergeWorksheet,
+  parseWorksheet,
+  toWorksheet,
+  worksheetPrompt,
   type PromptProfile,
   type ToneId,
 } from "@socius/prompts";
@@ -19,6 +23,7 @@ import {
   type TokenUsage,
 } from "@/lib/server/anthropic";
 import { historyWindowWithState, parseMessages } from "@/lib/server/transcript";
+import { isSessionId, saveWorksheet } from "@/lib/server/worksheet";
 import {
   addTokenUsage,
   checkDailyLimit,
@@ -45,6 +50,10 @@ type Body = {
   theme?: string;
   profile?: PromptProfile | null;
   messages?: unknown;
+  /** Which 壁打ち this turn belongs to — where the sheet is written back. */
+  sessionId?: unknown;
+  /** The sheet as the client holds it, including anything the student edited. */
+  worksheet?: unknown;
 };
 
 function parseProfile(value: unknown): PromptProfile | null {
@@ -92,6 +101,19 @@ export async function POST(request: Request) {
   const profile = parseProfile(body.profile);
   const messages = parseMessages(body.messages);
   const theme = typeof body.theme === "string" ? body.theme.slice(0, 120) : "";
+
+  /**
+   * The sheet, as it stands before this turn.
+   *
+   * Read from the request rather than from Firestore, for the same reason the
+   * profile is: verifying the ID token already proves who the caller is, and
+   * the only thing they could misreport is their own conversation's notes,
+   * which changes nothing except the questions they get asked. Reading it here
+   * would be a Firestore round trip in front of every reply, on the screen
+   * where latency is most visible.
+   */
+  const sheet = toWorksheet(body.worksheet);
+  const sessionId = isSessionId(body.sessionId) ? body.sessionId : null;
 
   // An empty transcript means the session is brand new and the AI speaks
   // first; there is no student turn to respond to yet.
@@ -147,7 +169,11 @@ export async function POST(request: Request) {
           // oldest rally falls off the front of every request and the entry
           // could never be read — marking it then would buy nothing and be
           // charged 1.25× for it.
-          toAnthropicMessages(history.messages, history.complete),
+          // The sheet rides at the end, behind the breakpoint: it is what
+          // keeps the turns that have fallen out of the window from being
+          // forgotten, and it is different every turn, so it must not sit in
+          // front of anything cached.
+          toAnthropicMessages(history.messages, history.complete, worksheetPrompt(sheet)),
     });
 
     // Driven with next() rather than `for await`, because breaking out of a
@@ -226,6 +252,11 @@ export async function POST(request: Request) {
   const responseBody = new ReadableStream<Uint8Array>({
     async start(controller) {
       controller.enqueue(encoder.encode(first));
+      // The reply is also kept whole, not only forwarded a chunk at a time:
+      // the エピソードシート is written at the very end of it, and it is this
+      // side that saves it. The client is sent the same bytes and strips the
+      // block before anything is drawn or stored.
+      let full = first;
       try {
         for (;;) {
           // A student who navigates away mid-reply should not keep the
@@ -238,7 +269,10 @@ export async function POST(request: Request) {
           if (done) break;
           tokens = foldStreamUsage(tokens, value);
           const text = deltaText(value);
-          if (text) controller.enqueue(encoder.encode(text));
+          if (text) {
+            full += text;
+            controller.enqueue(encoder.encode(text));
+          }
         }
       } catch (e) {
         // Nothing can be said in-band at this point; the client keeps the
@@ -265,6 +299,25 @@ export async function POST(request: Request) {
         void addTokenUsage(uid, idToken, day, tokens).catch((e) =>
           console.error("[usage] could not record the turn's tokens", e),
         );
+
+        /**
+         * この回の整理を、会話の記憶として書き戻す。
+         *
+         * 打ち切られた回にはシートのブロックが届いていないので、mergeWorksheet は
+         * 「変わっていない」を返し、書き込みは起きない。それでよく、それが正しい:
+         * 途中で止めた返答の途中までの整理を保存すると、次のターンには本人が読んで
+         * いない結論が「聞いた話」として同封される。
+         *
+         * 応答の外で走る。本文はもう閉じていて、学生は返事を読んでいる。ここで失敗
+         * して失われるのは1ターンぶんの整理で、会話そのものではない——だから投げず
+         * に記録する。
+         */
+        const update = parseWorksheet(full);
+        if (sessionId && update) {
+          void saveWorksheet(uid, idToken, sessionId, mergeWorksheet(sheet, update)).catch(
+            (e) => console.error("[worksheet] シートを保存できませんでした", e),
+          );
+        }
       }
     },
   });

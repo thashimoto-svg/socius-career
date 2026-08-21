@@ -1,22 +1,28 @@
 /**
- * What one 壁打ち session costs, before and after.
+ * What one 壁打ち costs, at six rallies of history and at sixteen.
  *
- * Replays the same scripted ten-rally conversation through both request shapes
- * against the real API, and prices the reported usage. Real calls rather than
- * arithmetic on token counts, because the only way to know a cache breakpoint
- * engaged is to read `cache_read_input_tokens` off a response that actually
- * happened — a breakpoint under the minimum prefix silently caches nothing and
- * looks identical in a spreadsheet.
+ * Replays the same scripted conversation through both window sizes against the
+ * real API, and prices the reported usage. Real calls rather than arithmetic on
+ * token counts, because the only way to know a cache breakpoint engaged is to
+ * read `cache_read_input_tokens` off a response that actually happened — a
+ * breakpoint under the minimum prefix silently caches nothing and looks
+ * identical in a spreadsheet.
  *
- *   node --experimental-strip-types --import ./scripts/ts-resolve.mjs \
- *     scripts/measure-session-cost.mjs
+ * Both runs are cached. That is the whole question this file was re-pointed at:
+ * the earlier version compared 12往復 uncached against 6往復 cached, which
+ * measured two changes at once. Widening the window is only affordable if the
+ * turns it adds are read out of the cache rather than written again, and
+ * `cacheRead` climbing while `input` stays flat is what that looks like.
+ *
+ *   npm run measure:cost
  */
 import {
   buildChatSystemBlocks,
   buildOpeningInstruction,
-  INVARIANT_CORE,
-  profileBlock,
-  TONES,
+  EMPTY_WORKSHEET,
+  mergeWorksheet,
+  readReply,
+  worksheetPrompt,
 } from "../prompts/index.ts";
 import {
   CHAT_MAX_TOKENS,
@@ -55,7 +61,13 @@ const PROFILE = {
 const THEME = "アルバイトの経験";
 const MODE = "counselor";
 
-/** A scripted student, so both runs see byte-identical transcripts. */
+/**
+ * A scripted student, so both runs see byte-identical transcripts.
+ *
+ * Twenty turns rather than ten: at ten, a six-rally window and a sixteen-rally
+ * window are the same request for the first six turns and differ only at the
+ * end, which understates both the cost and the point.
+ */
 const STUDENT_TURNS = [
   "居酒屋のホールで2年間バイトしていました。",
   "忙しい時間帯に注文が詰まって、クレームが増えたことがありました。",
@@ -67,35 +79,31 @@ const STUDENT_TURNS = [
   "納得してもらうには、自分でやってみせるしかないと思ったからです。",
   "言い出すのは怖かったですが、黙っている方が嫌でした。",
   "困っている人がそのままなのが、いちばん落ち着かないんだと思います。",
+  "そのあと、新人の子が入ってきて、教える係も任されました。",
+  "最初は口で説明していましたが、あまり伝わりませんでした。",
+  "やって見せてから同じことをやってもらう形に変えました。",
+  "その子は3ヶ月くらいで一人でホールを回せるようになりました。",
+  "自分が教わったときは、放っておかれて苦しかった記憶があります。",
+  "だから同じ思いはさせたくないと思っていました。",
+  "店長からは、後輩の定着率が上がったと言われました。",
+  "辞める人が減ったのは、たぶんそこが大きかったと思います。",
+  "自分は、人が続けられる状態を作るのが好きなんだと思います。",
+  "就活でも、そういう仕事を選びたいと思っています。",
 ];
 
-/** The 12-rally, uncached shape this app sent before the change. */
-function beforeRequest(transcript) {
-  const themeBlock = `\n\n【今日のテーマ】\n${THEME}\nこのテーマから逸れそうなときは、自然に引き戻してください。`;
-  return {
-    model: CHAT_MODEL,
-    max_tokens: CHAT_MAX_TOKENS,
-    system: [INVARIANT_CORE, profileBlock(PROFILE), TONES[MODE].instruction + themeBlock].join(
-      "\n\n",
-    ),
-    messages:
-      transcript.length === 0
-        ? [{ role: "user", content: buildOpeningInstruction() }]
-        : toAnthropicMessages(historyWindowWithState(transcript, 12).messages),
-  };
-}
-
-/** The 6-rally, three-breakpoint shape it sends now. */
-function afterRequest(transcript) {
-  const history = historyWindowWithState(transcript, 6);
-  return {
-    model: CHAT_MODEL,
-    max_tokens: CHAT_MAX_TOKENS,
-    system: buildChatSystemBlocks({ profile: PROFILE, mode: MODE, theme: THEME }),
-    messages:
-      transcript.length === 0
-        ? [{ role: "user", content: buildOpeningInstruction() }]
-        : toAnthropicMessages(history.messages, history.complete),
+/** One turn, at the given window size — otherwise exactly what /api/chat sends. */
+function requestAt(rallies) {
+  return (transcript, sheet) => {
+    const history = historyWindowWithState(transcript, rallies);
+    return {
+      model: CHAT_MODEL,
+      max_tokens: CHAT_MAX_TOKENS,
+      system: buildChatSystemBlocks({ profile: PROFILE, mode: MODE, theme: THEME }),
+      messages:
+        transcript.length === 0
+          ? [{ role: "user", content: buildOpeningInstruction() }]
+          : toAnthropicMessages(history.messages, history.complete, worksheetPrompt(sheet)),
+    };
   };
 }
 
@@ -103,13 +111,14 @@ async function runSession(label, build) {
   const client = getAnthropic();
   const transcript = [];
   const rows = [];
+  let sheet = EMPTY_WORKSHEET;
   let total = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
 
-  // Turn 0 is the AI's opening line; then ten student turns.
+  // Turn 0 is the AI's opening line; then the student's turns.
   for (let turn = 0; turn <= STUDENT_TURNS.length; turn += 1) {
     if (turn > 0) transcript.push({ role: "user", text: STUDENT_TURNS[turn - 1] });
 
-    const message = await client.messages.create(build(transcript));
+    const message = await client.messages.create(build(transcript, sheet));
     const u = toTokenUsage(message.usage);
     total = {
       input: total.input + u.input,
@@ -119,8 +128,10 @@ async function runSession(label, build) {
     };
     rows.push({ turn, ...u, usd: cost(u) });
 
-    const reply = message.content.find((b) => b.type === "text")?.text ?? "";
-    transcript.push({ role: "ai", text: reply });
+    const raw = message.content.find((b) => b.type === "text")?.text ?? "";
+    const reply = readReply(raw);
+    sheet = mergeWorksheet(sheet, reply.sheet);
+    transcript.push({ role: "ai", text: reply.text });
   }
 
   console.log(`\n=== ${label} ===`);
@@ -143,16 +154,24 @@ async function runSession(label, build) {
 
 console.log(`model: ${CHAT_MODEL}   ${STUDENT_TURNS.length} 往復 + 初回発話`);
 
-const before = await runSession("BEFORE — 12往復, キャッシュなし", beforeRequest);
-const afterCold = await runSession("AFTER — 6往復, キャッシュあり (コールド)", afterRequest);
-const afterWarm = await runSession("AFTER — 6往復, キャッシュあり (ウォーム)", afterRequest);
+// Cold first, so the shared prefix is warm for everything after it — the same
+// order a real cohort produces, where one student's turn keeps the block warm
+// for the next student's.
+const before = await runSession("BEFORE — 6往復 (キャッシュあり)", requestAt(6));
+const after = await runSession("AFTER — 16往復 (キャッシュあり)", requestAt(16));
 
-const pct = (a, b) => `${(((a - b) / a) * 100).toFixed(1)}%`;
+const pct = (a, b) => `${(((b - a) / a) * 100).toFixed(1)}%`;
 console.log("\n=== 差分 ===");
-console.log(`BEFORE            $${before.usd.toFixed(6)}`);
+console.log(`BEFORE  6往復   $${before.usd.toFixed(6)}  / ¥${(before.usd * USD_PER_JPY).toFixed(2)}`);
 console.log(
-  `AFTER (cold)      $${afterCold.usd.toFixed(6)}   −${pct(before.usd, afterCold.usd)}`,
+  `AFTER  16往復   $${after.usd.toFixed(6)}  / ¥${(after.usd * USD_PER_JPY).toFixed(2)}` +
+    `   ${after.usd >= before.usd ? "+" : ""}${pct(before.usd, after.usd)}`,
 );
 console.log(
-  `AFTER (warm)      $${afterWarm.usd.toFixed(6)}   −${pct(before.usd, afterWarm.usd)}`,
+  `\n入力の内訳   BEFORE  uncached ${before.total.input}  cacheR ${before.total.cacheRead}` +
+    `  cacheW ${before.total.cacheWrite}`,
+);
+console.log(
+  `             AFTER   uncached ${after.total.input}  cacheR ${after.total.cacheRead}` +
+    `  cacheW ${after.total.cacheWrite}`,
 );

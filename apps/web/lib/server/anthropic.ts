@@ -74,6 +74,22 @@ export function toAnthropicMessages(
    * who has not thought about it does not pay a write premium by accident.
    */
   cacheTail = false,
+  /**
+   * A block carried behind the newest turn — in practice the エピソードシート.
+   *
+   * It goes here, at the very end of the request, and not in the system prompt,
+   * because it is the one thing in a turn that is different every time. A cache
+   * entry is a prefix match: everything in front of a breakpoint has to be
+   * byte-identical for the entry to be read. Put the sheet in the system prompt
+   * and it sits ahead of both breakpoints there *and* the one on the
+   * transcript, so a sheet that changed — which it does every turn, by design —
+   * would mean the whole request is uncached, forever.
+   *
+   * Behind the breakpoint instead, it costs its own tokens each turn and
+   * nothing else: the prefix ending at the student's newest words is the same
+   * prefix the next turn will send, whatever the sheet says by then.
+   */
+  appended?: string,
 ): MessageParam[] {
   const converted: MessageParam[] = messages.map((m) => ({
     role: m.role === "ai" ? ("assistant" as const) : ("user" as const),
@@ -87,16 +103,21 @@ export function toAnthropicMessages(
   // The last turn, not the last-but-one. This request will not read what it
   // writes — the entry is for the *next* turn, whose transcript begins with
   // everything in this one.
-  if (cacheTail && converted.length > 0) {
-    const last = converted[converted.length - 1];
-    converted[converted.length - 1] = {
+  const tail = converted.length - 1;
+  if ((cacheTail || appended) && tail >= 0) {
+    const last = converted[tail];
+    const text = typeof last.content === "string" ? last.content : "";
+    converted[tail] = {
       role: last.role,
       content: [
         {
           type: "text",
-          text: typeof last.content === "string" ? last.content : "",
-          cache_control: { type: "ephemeral" },
+          text,
+          // The breakpoint goes on the student's words, never on the block
+          // after them — that is the whole reason they are two blocks.
+          ...(cacheTail ? { cache_control: { type: "ephemeral" as const } } : {}),
         },
+        ...(appended ? [{ type: "text" as const, text: appended }] : []),
       ],
     };
   }
