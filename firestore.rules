@@ -56,8 +56,21 @@ service cloud.firestore {
           && (!incoming().keys().hasAny(['progress'])
               || (incoming().progress is list && incoming().progress.size() <= 5));
 
-        // Messages are an append-only log: the transcript is the evidence the
-        // 自分史 is extracted from, so it must not be editable after the fact.
+        // Messages were an append-only log, and mostly still are. The one
+        // exception is the student correcting their own words (β報告 8/18):
+        // typos and half-finished sentences went into the transcript the 自分史
+        // is extracted from, with no way back except deleting the turn.
+        //
+        // The exception is drawn as narrowly as it can be:
+        //
+        // - `role == 'user'` only. An AI line is the record of what was said to
+        //   the student, and a transcript where that can be rewritten is not
+        //   evidence of anything.
+        // - `text` and `editedAt` only. Not `role`, which would let a student's
+        //   own line be re-labelled as something the AI said; not `createdAt`,
+        //   which is what the transcript is ordered by.
+        // - `editedAt` is required on every update, so a correction cannot be
+        //   made silently. The bubble shows 「編集済み」 from it.
         match /messages/{messageId} {
           allow read: if isOwner(uid);
           allow create: if isOwner(uid)
@@ -66,7 +79,20 @@ service cloud.firestore {
             && incoming().text is string
             && incoming().text.size() > 0
             && incoming().text.size() <= 8000;
-          allow update: if false;
+          allow update: if isOwner(uid)
+            && resource.data.role == 'user'
+            // Exactly these two fields moved — no more, and no fewer. `hasAll`
+            // as well as `hasOnly` is what makes a missing `editedAt` a plain
+            // denial: naming the field directly when it is absent is an
+            // *evaluation error*, which denies today by accident rather than
+            // on purpose. That distinction has already cost this file one bug
+            // (see 「count が無いドキュメント」 above).
+            && incoming().diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt'])
+            && incoming().diff(resource.data).affectedKeys().hasAll(['text', 'editedAt'])
+            && incoming().text is string
+            && incoming().text.size() > 0
+            && incoming().text.size() <= 8000
+            && incoming().editedAt is timestamp;
           allow delete: if isOwner(uid);
         }
       }

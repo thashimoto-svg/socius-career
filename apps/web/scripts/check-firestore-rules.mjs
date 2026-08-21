@@ -1,5 +1,6 @@
 /**
- * Offline checks for firestore.rules — the usage document specifically.
+ * Offline checks for firestore.rules — the two places where a rule is the whole
+ * access boundary rather than a backstop behind a trusted server.
  *
  * That document is the one place where an access-control decision and a cost
  * decision meet. It holds two counters written by two different code paths for
@@ -51,6 +52,8 @@ const ME = "student-a";
 const OTHER = "student-b";
 const DAY = "2026-08-12";
 const usagePath = (uid = ME) => `users/${uid}/usage/${DAY}`;
+const SESSION = "session-1";
+const msgPath = (id, uid = ME) => `users/${uid}/sessions/${SESSION}/messages/${id}`;
 
 let failures = 0;
 
@@ -77,6 +80,17 @@ async function seed(data) {
 async function fresh(data) {
   await env.clearFirestore();
   if (data) await seed(data);
+}
+
+/** Put a transcript line in place without going through the rules. */
+async function seedMessage(id, data) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), msgPath(id)), {
+      mode: null,
+      createdAt: new Date(),
+      ...data,
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +204,95 @@ await ok("他人のトークンも足せない", () =>
   assertFails(
     updateDoc(doc(theirs(), usagePath(ME)), { inputTokens: increment(1), updatedAt: new Date() }),
   ),
+);
+
+// ---------------------------------------------------------------------------
+console.log("\n本文の訂正 — 直せるのは自分の言葉だけ");
+// ---------------------------------------------------------------------------
+
+/*
+  The transcript is the evidence the 自分史 is extracted from, and it was
+  append-only for that reason. Letting the student fix their own typo (β報告
+  8/18) opens exactly one hole in that, and everything below is about how far
+  the hole goes: their own turns, their own words, and never silently.
+*/
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活でリーダーをやってました" });
+await ok("自分の発言は直せる", () =>
+  assertSucceeds(
+    updateDoc(doc(mine(), msgPath("m1")), { text: "部活で副キャプテンをやってました", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活でリーダーをやってました" });
+await ok("editedAt 無しでは直せない(黙って書き換えられない)", () =>
+  assertFails(updateDoc(doc(mine(), msgPath("m1")), { text: "書き換え" })),
+);
+
+await fresh();
+await seedMessage("m2", { role: "ai", text: "どんな部活でしたか?", mode: "counselor" });
+await ok("AIの発言は直せない(言われたことの記録)", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m2")), { text: "でっちあげ", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("role は変えられない(自分の発言をAIの発言にできない)", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { role: "ai", text: "AIが言ったこと", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("createdAt は変えられない(並び順は動かせない)", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { createdAt: new Date(2020, 0, 1), editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("空文字にはできない", () =>
+  assertFails(updateDoc(doc(mine(), msgPath("m1")), { text: "", editedAt: new Date() })),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("8000字を超えては書けない", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { text: "あ".repeat(8001), editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("知らないフィールドは足せない", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { text: "直した", editedAt: new Date(), evil: true }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("他人の発言は直せない", () =>
+  assertFails(
+    updateDoc(doc(theirs(), msgPath("m1", ME)), { text: "横取り", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("自分の発言は消せる", () => assertSucceeds(deleteDoc(doc(mine(), msgPath("m1")))));
+
+await fresh();
+await seedMessage("m2", { role: "ai", text: "どんな部活でしたか?" });
+await ok("直後のAI応答も消せる(発言と応答は対で消える)", () =>
+  assertSucceeds(deleteDoc(doc(mine(), msgPath("m2")))),
 );
 
 await env.cleanup();

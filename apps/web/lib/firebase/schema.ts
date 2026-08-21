@@ -93,6 +93,15 @@ export type Message = {
   /** Which tone produced an AI line; null for the student's own words. */
   mode: ChatMode | null;
   createdAt: Date | null;
+  /**
+   * When the student corrected their own words, if they did.
+   *
+   * Null on every line that has never been touched, which is nearly all of
+   * them and all of the AI's. It is what the bubble's 「編集済み」 is drawn
+   * from — a transcript the 自分史 is extracted from should not be able to
+   * change without saying so.
+   */
+  editedAt: Date | null;
 };
 
 export type Star = { S: string; T: string; A: string; R: string };
@@ -136,6 +145,10 @@ export function sessionRef(uid: string, sessionId: string) {
 
 export function messagesRef(uid: string, sessionId: string) {
   return collection(getDb(), "users", uid, "sessions", sessionId, "messages");
+}
+
+export function messageRef(uid: string, sessionId: string, messageId: string) {
+  return doc(getDb(), "users", uid, "sessions", sessionId, "messages", messageId);
 }
 
 export function episodesRef(uid: string): CollectionReference<DocumentData> {
@@ -189,6 +202,7 @@ export function toMessage(id: string, d: DocumentData): Message {
     text: typeof d.text === "string" ? d.text : "",
     mode: d.mode === "counselor" || d.mode === "karakuchi" ? d.mode : null,
     createdAt: toDate(d.createdAt),
+    editedAt: toDate(d.editedAt),
   };
 }
 

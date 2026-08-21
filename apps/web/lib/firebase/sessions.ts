@@ -8,6 +8,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  writeBatch,
   startAfter,
   Timestamp,
   updateDoc,
@@ -16,7 +17,9 @@ import {
   type DocumentData,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
+import { getDb } from "./client";
 import {
+  messageRef,
   messagesRef,
   sessionRef,
   sessionsRef,
@@ -270,7 +273,7 @@ export async function appendMessage(
     ...(msg.role === "user" ? { turnCount: increment(1) } : {}),
   });
 
-  return { id: ref.id, ...msg, createdAt: null };
+  return { id: ref.id, ...msg, createdAt: null, editedAt: null };
 }
 
 /**
@@ -297,6 +300,68 @@ export async function renameSession(
   await updateDoc(sessionRef(uid, sessionId), {
     title: title.slice(0, TITLE_MAX_LENGTH),
   });
+}
+
+/**
+ * Correct one of the student's own turns.
+ *
+ * The reply that followed is deliberately left alone. Regenerating it would be
+ * the thorough answer and the wrong one for this: the AI's line is the record
+ * of what it actually said, the student read it, and replacing it would rewrite
+ * a conversation that already happened. The correction is carried into the
+ * *next* request instead, because that request is built from the transcript —
+ * so from the following turn on, the model sees what the student meant.
+ *
+ * `editedAt` is not optional: firestore.rules requires it on every update, so
+ * a line cannot be changed without the transcript recording that it was.
+ */
+export async function editUserMessage(
+  uid: string,
+  sessionId: string,
+  messageId: string,
+  text: string,
+): Promise<void> {
+  await updateDoc(messageRef(uid, sessionId, messageId), {
+    text,
+    editedAt: serverTimestamp(),
+  });
+}
+
+/**
+ * Remove a turn the student took, and the reply it drew.
+ *
+ * The pair goes together because a question with nothing in front of it is
+ * worse than nothing: an AI line asking 「どんな部活でしたか?」 under a
+ * transcript that no longer contains the student mentioning a 部活 reads as the
+ * app talking to itself, and it is what the next request would be built from.
+ *
+ * `turnCount` follows, because 「N往復」 in the 履歴 list counts the student's
+ * turns and a deleted one did not happen. `extractedCount` follows too: it
+ * counts transcript lines from the beginning, so lines removed from *before*
+ * the mark have to come off it or the mark points past the end of a
+ * conversation that is now shorter — and the 自分史 would quietly stop reading
+ * anything new until the transcript grew back past it.
+ */
+export async function deleteMessages(
+  uid: string,
+  sessionId: string,
+  messageIds: string[],
+  counters: { userTurns: number; extractedBefore: number },
+): Promise<void> {
+  const batch = writeBatch(getDb());
+  for (const id of messageIds) batch.delete(messageRef(uid, sessionId, id));
+
+  const patch: Record<string, unknown> = {};
+  if (counters.userTurns > 0) patch.turnCount = increment(-counters.userTurns);
+  if (counters.extractedBefore > 0) {
+    patch.extractedCount = increment(-counters.extractedBefore);
+  }
+  // updatedAt is left where it is, like every other write that is bookkeeping
+  // rather than conversation: tidying up a turn must not send the thread to the
+  // top of the 履歴 list.
+  if (Object.keys(patch).length > 0) batch.update(sessionRef(uid, sessionId), patch);
+
+  await batch.commit();
 }
 
 export async function updateSessionMeta(

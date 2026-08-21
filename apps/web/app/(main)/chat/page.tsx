@@ -13,7 +13,12 @@ import {
 import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
-import { CopyMessageButton, MessageActions } from "@/components/MessageActions";
+import {
+  CopyMessageButton,
+  MessageActionButton,
+  MessageActions,
+} from "@/components/MessageActions";
+import { MessageDeleteDialog, MessageEdit } from "@/components/MessageEdit";
 import { ProgressRail } from "@/components/ProgressRail";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
@@ -27,6 +32,8 @@ import type { ProgressStep } from "@socius/prompts";
 import {
   openChat,
   appendMessage,
+  deleteMessages,
+  editUserMessage,
   getOlderMessages,
   getWholeTranscript,
   saveProgress,
@@ -112,6 +119,12 @@ function ChatScreen() {
   /** How many of the loaded lines are folded away above the visible ones. */
   const [hidden, setHidden] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  /** The student's own turn being corrected, and the one being deleted. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   /**
    * On a phone, Enter is 改行 and 送信 is the button — nothing else.
@@ -492,6 +505,97 @@ function ChatScreen() {
     }
   };
 
+  /**
+   * Save a correction to one of the student's own turns.
+   *
+   * Local state moves with it rather than being re-read: the transcript on
+   * screen is the transcript the next request is built from, so the two have
+   * to be the same object. `editedAt` is stamped by the server and read back
+   * on the next open; a Date now is close enough for the 「編集済み」 that has
+   * to appear immediately.
+   */
+  const saveEdit = async (messageId: string, text: string) => {
+    if (!user || !session) return;
+    setSavingEdit(true);
+    setError(null);
+    try {
+      await editUserMessage(user.uid, session.id, messageId, text);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, text, editedAt: new Date() } : m)),
+      );
+      setEditingId(null);
+    } catch (e) {
+      console.error("[chat] 発言を編集できませんでした", e);
+      setError("発言を編集できませんでした。通信状況を確認して、もう一度お試しください。");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  /**
+   * The turn being deleted, and the reply it drew.
+   *
+   * Only an AI line *immediately* after it: a student who sent two messages in
+   * a row before the model answered owns both of them, and the reply belongs to
+   * the second.
+   */
+  const deletionOf = (messageId: string) => {
+    const at = messages.findIndex((m) => m.id === messageId);
+    if (at < 0) return null;
+    const next = messages[at + 1];
+    const ids = [messageId];
+    if (next?.role === "ai") ids.push(next.id);
+    return { at, ids };
+  };
+
+  const confirmDelete = async () => {
+    if (!user || !session || !deletingId) return;
+    const target = deletionOf(deletingId);
+    if (!target) {
+      setDeletingId(null);
+      return;
+    }
+
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      // Lines removed from before the extraction mark have to come off it, or
+      // it points past the end of a conversation that is now shorter and the
+      // 自分史 quietly reads nothing new until the transcript grows back past
+      // it. Only computable while the whole transcript is on screen: with a
+      // tail loaded, `at` is an index into the tail and the mark counts from
+      // the beginning, so the two are not the same number. Left alone in that
+      // case, which errs towards reading too little rather than twice.
+      const extractedBefore = complete
+        ? target.ids.filter((_, i) => target.at + i < session.extractedCount).length
+        : 0;
+
+      await deleteMessages(user.uid, session.id, target.ids, {
+        // Only the student's turn moves 「N往復」; the reply was never counted.
+        userTurns: 1,
+        extractedBefore,
+      });
+
+      const gone = new Set(target.ids);
+      setMessages((prev) => prev.filter((m) => !gone.has(m.id)));
+      setSession((prev) =>
+        prev && prev.id === session.id
+          ? {
+              ...prev,
+              turnCount: Math.max(0, prev.turnCount - 1),
+              extractedCount: Math.max(0, prev.extractedCount - extractedBefore),
+            }
+          : prev,
+      );
+      setDeletingId(null);
+    } catch (e) {
+      console.error("[chat] 発言を削除できませんでした", e);
+      setDeleteError("削除できませんでした。通信状況を確認して、もう一度お試しください。");
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   const send = async () => {
     const text = draft.trim();
     if (!text || !user || !session || thinking) return;
@@ -728,22 +832,60 @@ function ChatScreen() {
             it falls in the conversation, not where it falls in today's view. */}
         {messages.slice(hidden).map((m, j) => {
           const i = hidden + j;
+          const own = m.role === "user";
           return (
             // Fragment rather than a wrapper, so the bubbles stay siblings and
             // nothing about the transcript's layout depends on whether a slot
             // happens to fall here.
             <Fragment key={m.id}>
-              <Bubble who={m.role} mode={m.mode ?? mode} fade={fresh.current.has(m.id)}>
-                {m.text}
-              </Bubble>
-              {/* Only under the student's own lines. 「自分の発言をコピー」 is
-                  about getting their own words back out of the app — into an
-                  ES, a document, a notes app — which is the whole point of
-                  having said them here. */}
-              {m.role === "user" && (
-                <MessageActions>
-                  <CopyMessageButton text={m.text} />
-                </MessageActions>
+              {editingId === m.id ? (
+                <MessageEdit
+                  text={m.text}
+                  saving={savingEdit}
+                  onSave={(next) => void saveEdit(m.id, next)}
+                  onCancel={() => setEditingId(null)}
+                />
+              ) : (
+                <>
+                  <Bubble
+                    who={m.role}
+                    mode={m.mode ?? mode}
+                    fade={fresh.current.has(m.id)}
+                    edited={m.editedAt !== null}
+                  >
+                    {m.text}
+                  </Bubble>
+                  {/* Only under the student's own lines. Copying is about
+                      getting their own words back out of the app — into an ES,
+                      a document, a notes app — which is the whole point of
+                      having said them here; and correcting or removing one is
+                      only theirs to do because an AI line is the record of what
+                      was said to them, not something they wrote.
+
+                      Not while a reply is being written: the turn in flight was
+                      built from this transcript, and changing it underneath
+                      would leave what is on screen and what the model is
+                      answering as two different conversations. */}
+                  {own && (
+                    <MessageActions>
+                      <CopyMessageButton text={m.text} />
+                      <MessageActionButton
+                        label="編集"
+                        disabled={thinking}
+                        onClick={() => setEditingId(m.id)}
+                      />
+                      <MessageActionButton
+                        label="削除"
+                        tone="warn"
+                        disabled={thinking}
+                        onClick={() => {
+                          setDeleteError(null);
+                          setDeletingId(m.id);
+                        }}
+                      />
+                    </MessageActions>
+                  )}
+                </>
               )}
               {/* Every AD_INTERVAL messages, and never under the last one —
                   see adSlotFollows. The index keeps successive slots from
@@ -933,6 +1075,20 @@ function ChatScreen() {
           )}
         </div>
       </div>
+
+      {deletingId && (
+        <MessageDeleteDialog
+          withReply={(deletionOf(deletingId)?.ids.length ?? 1) > 1}
+          busy={deleteBusy}
+          error={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeletingId(null);
+            setDeleteError(null);
+          }}
+        />
+      )}
     </div>
   );
 }
