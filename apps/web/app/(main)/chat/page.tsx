@@ -22,6 +22,7 @@ import {
 } from "@/components/MessageActions";
 import { MessageDeleteDialog, MessageEdit } from "@/components/MessageEdit";
 import { ProgressRail } from "@/components/ProgressRail";
+import { ReplyChoices } from "@/components/ReplyChoices";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
 import { useBeforeLeave } from "@/components/leave-guard";
@@ -261,7 +262,7 @@ function ChatScreen() {
         // downstream — the transcript, the 自分史 extraction, the next request's
         // history — ever sees one, so there is exactly one place that has to
         // get the stripping right.
-        const { text, sheet } = readReply(raw);
+        const { text, sheet, choices } = readReply(raw);
         if (!text) {
           // 停止 pressed before anything arrived. Nothing was said, so there is
           // nothing to write down and nothing to apologise for — the student
@@ -278,6 +279,7 @@ function ChatScreen() {
           role: "ai",
           text,
           mode: tone,
+          choices,
         });
         // Written to Firestore regardless — the conversation that asked for
         // this reply gets it whether or not anyone is looking. Only the screen
@@ -516,7 +518,7 @@ function ChatScreen() {
     if (e.key !== "Enter" || e.shiftKey || !enterSends) return;
     if (e.nativeEvent.isComposing) return;
     e.preventDefault();
-    void send();
+    send();
   };
 
   // The box is one line tall until it is not. Measured rather than counted,
@@ -660,11 +662,17 @@ function ChatScreen() {
     }
   };
 
-  const send = async () => {
-    const text = draft.trim();
+  /**
+   * 一つの発言を送る、唯一の道。
+   *
+   * 入力欄から送るのも、選択肢を押すのもここを通る。押された選択肢は学生の発言
+   * そのものとして扱われる——引用でも選択の記録でもなく、その人がそう言った、
+   * という一行として保存される。あとから読み返す自分史に「選択肢2を選択」と
+   * 書いてあっても、それは誰の言葉でもない。
+   */
+  const sendText = async (text: string) => {
     if (!text || !user || !session || thinking) return;
 
-    setDraft("");
     // 送信 is the one gesture that moves the view regardless of where the
     // student had scrolled to: the line they just wrote is at the end.
     sending.current = true;
@@ -678,7 +686,9 @@ function ChatScreen() {
       });
     } catch {
       // The message was never written, so there is nothing to resend — the
-      // student's words go back in the box they came from instead of vanishing.
+      // student's words go into the box instead of vanishing. A chip that
+      // failed to send lands there too: it is a sentence the student chose,
+      // and the composer is where a sentence waits to be sent.
       setDraft(text);
       setError("メッセージを送れませんでした。通信状況を確認して、もう一度送信してください。");
       return;
@@ -698,6 +708,15 @@ function ChatScreen() {
     }
 
     await requestReply(session.id, next, session.mode, session.theme);
+  };
+
+  const send = () => {
+    const text = draft.trim();
+    if (!text || thinking) return;
+    // Emptied before the write, not after: the box has to be usable again the
+    // moment it is tapped, and the round trip is not the student's to wait for.
+    setDraft("");
+    void sendText(text);
   };
 
   // What automatic extraction reads, kept in a ref so the visibility listener
@@ -930,6 +949,17 @@ function ChatScreen() {
                       built from this transcript, and changing it underneath
                       would leave what is on screen and what the model is
                       answering as two different conversations. */}
+                  {/* 最後の一行にだけ。学生が答えたあとの吹き出しに選択肢が
+                      残っていると、もう終わった問いをもう一度聞かれているように
+                      見える。保存はされているので、開き直せばまた出る。 */}
+                  {!own && m.id === lastId && !thinking && (
+                    <ReplyChoices
+                      choices={m.choices}
+                      mode={m.mode ?? mode}
+                      disabled={editingId !== null}
+                      onChoose={(choice) => void sendText(choice)}
+                    />
+                  )}
                   {own && (
                     <MessageActions>
                       <CopyMessageButton text={m.text} />
@@ -1117,7 +1147,7 @@ function ChatScreen() {
           ) : (
             <button
               type="button"
-              onClick={() => void send()}
+              onClick={send}
               disabled={!draft.trim()}
               aria-label="送信"
               style={{

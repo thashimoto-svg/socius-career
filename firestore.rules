@@ -110,11 +110,16 @@ service cloud.firestore {
         match /messages/{messageId} {
           allow read: if isOwner(uid);
           allow create: if isOwner(uid)
-            && incoming().keys().hasOnly(['role', 'text', 'mode', 'createdAt'])
+            && incoming().keys().hasOnly(['role', 'text', 'mode', 'choices', 'createdAt'])
             && incoming().role in ['user', 'ai']
             && incoming().text is string
             && incoming().text.size() > 0
-            && incoming().text.size() <= 8000;
+            && incoming().text.size() <= 8000
+            // 答え方の見本。付く回のほうが少ないので任意で、中身は見ない——
+            // 学生が押すと自分の発言として送られるものなので、上の text と
+            // 同じ性質のものが入る。効いてほしいのは数だけ。
+            && (!incoming().keys().hasAny(['choices'])
+                || (incoming().choices is list && incoming().choices.size() <= 4));
           allow update: if isOwner(uid)
             && resource.data.role == 'user'
             // Exactly these two fields moved — no more, and no fewer. `hasAll`

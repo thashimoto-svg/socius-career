@@ -1,5 +1,6 @@
 import {
   EPISODE_PERIODS,
+  toChoices,
   toProgress,
   toWorksheet,
   type EpisodePeriod,
@@ -106,6 +107,14 @@ export type Message = {
   /** Which tone produced an AI line; null for the student's own words. */
   mode: ChatMode | null;
   createdAt: Date | null;
+  /**
+   * 押せる形で出す、答え方の見本。
+   *
+   * AIの発言にだけ付き、付かない回のほうが多い。保存しているのは、聞かれた
+   * まま閉じたアプリを開き直したときに選択肢が消えていないため——問いは残って
+   * いるのに選ぶものだけ無い画面は、答えを一つ失った会話に見える。
+   */
+  choices: string[];
   /**
    * When the student corrected their own words, if they did.
    *
@@ -218,6 +227,7 @@ export function toMessage(id: string, d: DocumentData): Message {
     role: d.role === "ai" ? "ai" : "user",
     text: typeof d.text === "string" ? d.text : "",
     mode: d.mode === "counselor" || d.mode === "karakuchi" ? d.mode : null,
+    choices: toChoices(d.choices),
     createdAt: toDate(d.createdAt),
     editedAt: toDate(d.editedAt),
   };

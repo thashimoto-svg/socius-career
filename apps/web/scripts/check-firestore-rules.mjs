@@ -259,6 +259,32 @@ await ok("自分の発言は直せる", () =>
 );
 
 await fresh();
+await ok("選択肢つきのAI発言を書ける", () =>
+  assertSucceeds(
+    setDoc(doc(mine(), msgPath("m3")), {
+      role: "ai",
+      text: "どちらの話から聞かせてもらえますか",
+      mode: "counselor",
+      choices: ["部活の話", "アルバイトの話"],
+      createdAt: new Date(),
+    }),
+  ),
+);
+
+await fresh();
+await ok("選択肢が5つは弾かれる", () =>
+  assertFails(
+    setDoc(doc(mine(), msgPath("m3")), {
+      role: "ai",
+      text: "どれですか",
+      mode: "counselor",
+      choices: ["1", "2", "3", "4", "5"],
+      createdAt: new Date(),
+    }),
+  ),
+);
+
+await fresh();
 await seedMessage("m1", { role: "user", text: "部活でリーダーをやってました" });
 await ok("editedAt 無しでは直せない(黙って書き換えられない)", () =>
   assertFails(updateDoc(doc(mine(), msgPath("m1")), { text: "書き換え" })),

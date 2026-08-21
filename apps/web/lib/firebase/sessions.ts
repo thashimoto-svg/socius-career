@@ -267,12 +267,22 @@ async function resumeById(
 export async function appendMessage(
   uid: string,
   sessionId: string,
-  msg: { role: MessageRole; text: string; mode: ChatMode | null },
+  msg: {
+    role: MessageRole;
+    text: string;
+    mode: ChatMode | null;
+    /** 答え方の見本。付く回のほうが少ないので、無いときは書かない。 */
+    choices?: string[];
+  },
 ): Promise<Message> {
+  const choices = msg.choices ?? [];
   const ref = await addDoc(messagesRef(uid, sessionId), {
     role: msg.role,
     text: msg.text,
     mode: msg.mode,
+    // 書かないのと空配列を書くのは同じ意味だが、前者はドキュメントに欄が
+    // 増えない。付かない回のほうが多いものを、全行に空で持たせる理由はない。
+    ...(choices.length > 0 ? { choices } : {}),
     createdAt: serverTimestamp(),
   });
 
@@ -281,7 +291,7 @@ export async function appendMessage(
     ...(msg.role === "user" ? { turnCount: increment(1) } : {}),
   });
 
-  return { id: ref.id, ...msg, createdAt: null, editedAt: null };
+  return { id: ref.id, ...msg, choices, createdAt: null, editedAt: null };
 }
 
 /**
