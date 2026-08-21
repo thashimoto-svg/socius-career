@@ -34,7 +34,11 @@ import {
   worksheetProgress,
   WORKSHEET_PROTOCOL,
 } from "../prompts/worksheet.ts";
-import { buildChatSystemBlocks, buildChatSystemPrompt } from "../prompts/modes/index.ts";
+import {
+  buildChatSystemBlocks,
+  buildChatSystemPrompt,
+  FOCUS_PROTOCOL,
+} from "../prompts/modes/index.ts";
 
 let failures = 0;
 
@@ -243,6 +247,19 @@ for (const step of PROGRESS_STEPS) {
   );
 }
 check("本文に混ぜるなと書いてある", WORKSHEET_PROTOCOL.includes("本文の中に混ぜない"));
+check("深掘りの規律もキャッシュされる側", blocks[0].text.includes(FOCUS_PROTOCOL));
+check(
+  "脱線の置き場所が pending だと書いてある",
+  FOCUS_PROTOCOL.includes("pending に一行で控える"),
+);
+check(
+  "回収の合図が書いてある",
+  FOCUS_PROTOCOL.includes("5つの節が埋まったら") && FOCUS_PROTOCOL.includes("先ほど"),
+);
+check(
+  "動機の一段が書いてある",
+  FOCUS_PROTOCOL.includes("なぜそうしようと思ったのですか"),
+);
 check(
   "毎回全部書けと書いてある",
   WORKSHEET_PROTOCOL.includes("毎回、全部の行を書く"),

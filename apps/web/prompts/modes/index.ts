@@ -2,9 +2,10 @@ import { blocksToText, type PromptBlock } from "../cache";
 import { CHOICES_PROTOCOL } from "../choices";
 import { WORKSHEET_PROTOCOL } from "../worksheet";
 import { INVARIANT_CORE, profileBlock, type PromptProfile } from "./core";
+import { FOCUS_PROTOCOL } from "./focus";
 import { TONES, type ToneId } from "./tones";
 
-export { INVARIANT_CORE, profileBlock, TONES };
+export { FOCUS_PROTOCOL, INVARIANT_CORE, profileBlock, TONES };
 export type { PromptProfile, ToneId };
 
 /**
@@ -58,6 +59,9 @@ export function buildChatSystemBlocks(opts: {
       type: "text",
       text: [
         INVARIANT_CORE,
+        // 深掘りの規律は不変の核の側。トーンで変わるのは言い方だけで、どこまで
+        // 掘るかも、掘っている途中で乗り換えないことも、両方のトーンで同じ。
+        FOCUS_PROTOCOL,
         TONES[opts.mode].instruction,
         CHOICES_PROTOCOL,
         WORKSHEET_PROTOCOL,
