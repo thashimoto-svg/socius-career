@@ -303,12 +303,41 @@ function ChatScreen() {
     );
   }, [opened.data]);
 
-  /** Whether the student is reading the end of the conversation right now. */
-  const atBottom = useCallback(() => {
-    const el = scrollerRef.current;
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  /**
+   * Whether the student is reading the end of the conversation.
+   *
+   * Read from a scroll listener into a ref rather than measured where it is
+   * needed, because most of the things that want to know are *resizes* — the
+   * keyboard opening, the composer growing a line — and by the time a resize
+   * handler runs, the box has already changed size and the measurement is of
+   * the world after the event rather than before it. The ref still holds the
+   * answer from before, which is the one that decides whether following the
+   * bottom is helpful or rude.
+   */
+  const wasAtBottom = useRef(true);
+
+  /**
+   * One scroll the student asked for, whatever they were reading.
+   *
+   * Set only by 送信. 「貼り付けたら画面が一番下に飛ぶ」 (β報告) was this screen
+   * chasing the bottom on every viewport event — a paste, the keyboard, the box
+   * gaining a line — so everything else now goes through wasAtBottom and moves
+   * nothing when the student is reading further up. Sending is different: they
+   * have just added the line at the end, and it is the line they want to see.
+   */
+  const sending = useRef(false);
+
+  const stickToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+    wasAtBottom.current = true;
   }, []);
+
+  const onTranscriptScroll = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    wasAtBottom.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  };
 
   // Keyed on the last message rather than on the array: loading older lines
   // grows `messages` at the *front*, and following that to the bottom would
@@ -317,9 +346,18 @@ function ChatScreen() {
   const lastId = messages.length > 0 ? messages[messages.length - 1].id : null;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: settled.current ? "smooth" : "auto" });
-    settled.current = true;
-  }, [lastId, thinking]);
+    // The first paint of a 壁打ち always lands at the end, and lands there
+    // instantly — smooth would animate the length of the whole transcript with
+    // the beginning of the thread on screen while it travelled.
+    if (!settled.current) {
+      stickToBottom();
+      settled.current = true;
+      return;
+    }
+    if (!sending.current && !wasAtBottom.current) return;
+    sending.current = false;
+    stickToBottom("smooth");
+  }, [lastId, thinking, stickToBottom]);
 
   // A reply lands a few characters at a time, and 「smooth」 on each of them is
   // a new scroll animation per token — the single most expensive thing this
@@ -327,9 +365,9 @@ function ChatScreen() {
   // scrolling back to re-read something mid-reply must not be undone by the
   // next token.
   useEffect(() => {
-    if (!streaming || !atBottom()) return;
-    bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [streaming, atBottom]);
+    if (!streaming || !wasAtBottom.current) return;
+    stickToBottom();
+  }, [streaming, stickToBottom]);
 
   // The keyboard opening takes about half the transcript away, and what it
   // takes is the bottom half — the last thing the AI asked. The shell resizing
@@ -342,11 +380,16 @@ function ChatScreen() {
     if (!visual) return;
     const stayAtBottom = () => {
       if (!document.activeElement?.closest(".sc-composer")) return;
-      bottomRef.current?.scrollIntoView({ block: "end" });
+      // Only for a student who was already reading the end. This fires on far
+      // more than the keyboard opening — a paste raises iOS's own bubble, and
+      // every one of those events used to be answered by jumping to the bottom
+      // of the conversation, which is 「貼り付け時に画面が最下部へ飛ぶ」.
+      if (!wasAtBottom.current) return;
+      stickToBottom();
     };
     visual.addEventListener("resize", stayAtBottom);
     return () => visual.removeEventListener("resize", stayAtBottom);
-  }, []);
+  }, [stickToBottom]);
 
   /**
    * Enter, and what it means here.
@@ -372,7 +415,11 @@ function ChatScreen() {
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
-  }, [draft]);
+    // A line gained here is a line the transcript loses. Someone reading the
+    // end keeps reading the end; someone reading further up is left where they
+    // were, because a box growing under them is not a reason to move.
+    if (wasAtBottom.current) stickToBottom();
+  }, [draft, stickToBottom]);
 
   /**
    * Show more of the conversation — 「以前のメッセージを読み込む」.
@@ -415,6 +462,9 @@ function ChatScreen() {
     if (!text || !user || !session || thinking) return;
 
     setDraft("");
+    // 送信 is the one gesture that moves the view regardless of where the
+    // student had scrolled to: the line they just wrote is at the end.
+    sending.current = true;
 
     let saved: Message;
     try {
@@ -594,6 +644,7 @@ function ChatScreen() {
       {/* transcript */}
       <div
         ref={scrollerRef}
+        onScroll={onTranscriptScroll}
         style={{
           flex: 1,
           minHeight: 0,
