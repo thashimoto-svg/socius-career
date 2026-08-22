@@ -16,6 +16,18 @@
  *
  *   npm run measure:cost
  */
+import fs from "node:fs";
+import path from "node:path";
+
+// 鍵は .env.local にある。dev サーバーは読んでくれるが、素の node は読まない。
+// getAnthropic() が呼ばれるのは下の実行時なので、静的importより後でも間に合う。
+for (const line of fs
+  .readFileSync(path.join(path.resolve(import.meta.dirname, ".."), ".env.local"), "utf8")
+  .split("\n")) {
+  const m = line.match(/^\s*([A-Z0-9_]+)=(.*)$/);
+  if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
+}
+
 import {
   buildChatSystemBlocks,
   buildOpeningInstruction,
