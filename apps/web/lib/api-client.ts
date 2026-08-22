@@ -91,12 +91,21 @@ export async function postJson<T>(path: string, user: User, body: unknown): Prom
  * `onChunk` receives each decoded delta as it lands so the reply can be shown
  * while it is still being written; the resolved value is the whole reply, which
  * is what gets saved to Firestore once the turn is finished.
+ *
+ * `stop` is the student's own abort — the 停止 button. It is not a failure and
+ * does not throw: whatever had arrived by then is returned exactly as a
+ * finished reply would be, because a reply the student cut off is still a
+ * reply, and the conversation has to be able to carry on from it. Aborting the
+ * fetch also closes the connection, which is what tells the route handler to
+ * stop generating rather than leaving the model running against a body nobody
+ * is reading.
  */
 export async function postStream(
   path: string,
   user: User,
   body: unknown,
   onChunk: (delta: string) => void,
+  stop?: AbortSignal,
 ): Promise<string> {
   const token = await idToken(user);
 
@@ -110,6 +119,22 @@ export async function postStream(
     clearTimeout(timer);
     timer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS);
   };
+
+  // Both aborts pull the same lever, so the difference has to be recorded
+  // before it is pulled: the signal alone cannot say afterwards whether the
+  // stream ran out of patience or the student pressed 停止, and those two want
+  // opposite endings.
+  let stopped = false;
+  const onStop = () => {
+    stopped = true;
+    controller.abort();
+  };
+  if (stop?.aborted) onStop();
+  stop?.addEventListener("abort", onStop);
+
+  // Hoisted out of the block below so the abort path can return what had
+  // already landed rather than only being able to report that it stopped.
+  let full = "";
 
   try {
     const res = await fetch(path, {
@@ -132,7 +157,6 @@ export async function postStream(
     // Multi-byte Japanese characters get split across chunk boundaries, so the
     // decoder has to carry state between reads rather than decode each one alone.
     const decoder = new TextDecoder();
-    let full = "";
 
     for (;;) {
       const { value, done } = await reader.read();
@@ -157,11 +181,17 @@ export async function postStream(
 
     return full;
   } catch (e) {
+    // 停止. Not an error, and not empty either as far as the caller is
+    // concerned — an empty string is the honest answer when the student got in
+    // before the first byte, and it is the caller's job to notice there is
+    // nothing to save.
+    if (stopped) return full;
     // Whatever the abort surfaced as — an AbortError from fetch, a read that
     // threw partway — the student's side of it is the same sentence.
     if (controller.signal.aborted) throw new ApiError(504, TIMED_OUT);
     throw e;
   } finally {
     clearTimeout(timer);
+    stop?.removeEventListener("abort", onStop);
   }
 }

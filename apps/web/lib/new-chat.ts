@@ -1,4 +1,4 @@
-import { defaultTheme } from "@socius/prompts";
+import { defaultTheme, PLACEHOLDER_TITLE } from "@socius/prompts";
 import { createSession } from "./firebase/sessions";
 import type { ChatMode, OnboardingProfile } from "./firebase/schema";
 import { LOAD_TIMEOUT_MS, withTimeout } from "./with-timeout";
@@ -24,8 +24,8 @@ export async function startChat(
   // leave 「準備しています…」 on screen with nothing coming.
   const created = await withTimeout(
     createSession(uid, {
-      // 「新しい壁打ち」 is a placeholder the student's first message replaces.
-      title: "新しい壁打ち",
+      // A placeholder the student's first message replaces.
+      title: PLACEHOLDER_TITLE,
       theme: defaultTheme(opts.profile),
       mode: opts.mode,
     }),

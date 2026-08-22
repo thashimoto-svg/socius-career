@@ -107,8 +107,117 @@ export function defaultTheme(profile: PromptProfile | null): string {
   return `${profile.club}の経験`;
 }
 
-/** A session title derived from the student's first message. */
+/**
+ * The placeholder a 壁打ち is created with, and what a title falls back to.
+ *
+ * Exported so the chat screen and the 履歴 rename can both recognise it — one
+ * to know a title is still up for grabs, the other to know an emptied box is
+ * not a title.
+ */
+export const PLACEHOLDER_TITLE = "新しい壁打ち";
+
+/** How long a title in the 履歴 list can be before it is cut. */
+const TITLE_MAX = 24;
+
+/**
+ * Openings that are not what the conversation is about.
+ *
+ * People do not start talking at the start of the sentence. 「えっと、」 and
+ * 「あの、」 are the sound of someone deciding what to say, and putting them at
+ * the front of a title spends the widest characters in the list on the one
+ * part of the message that carries nothing — every row in the 履歴 begins with
+ * the same noise, which is exactly as useful as no title at all.
+ *
+ * Only stripped from the front, only once around, and only when something is
+ * left afterwards: a message that is nothing but hesitation still has to end
+ * up with a name.
+ */
+const FILLERS = [
+  "えっと", "えーっと", "ええと", "えと", "あの", "あのー", "あのう",
+  "そのー", "うーん", "うーんと", "なんか", "なんていうか", "まあ", "まぁ",
+  "はい", "あ", "え", "お",
+];
+
+/** Sentence ends, in the order a title would rather stop at. */
+const SENTENCE_END = /[。．.!?！？]/;
+
+/**
+ * Trailing characters a title must not end on.
+ *
+ * A cut lands wherever the character count runs out, which in Japanese is
+ * usually mid-phrase — 「高校の部活の」 is not a shorter title than 「高校の
+ * 部活」, it is the same title that looks broken. Particles and punctuation
+ * come off the end until it stops on something that carries meaning.
+ */
+const DANGLING = /[\s、,・…。．.？?！!]+$/;
+const DANGLING_PARTICLE = /(?:の|は|が|を|に|で|と|も|や|へ|から|まで|より|って|という)$/;
+
+function stripFillers(line: string): string {
+  let out = line;
+  // Repeated, because hesitation comes in runs — 「えっと、あの、」 is one pause,
+  // not two. Bounded by the list length so a pathological input cannot spin.
+  for (let pass = 0; pass < FILLERS.length; pass += 1) {
+    const before = out;
+    for (const filler of FILLERS) {
+      // The 「、」 is what marks it as hesitation. 「あの人」 begins with 「あの」
+      // and is a person; 「あの、」 is always someone deciding what to say.
+      // Without the comma this rule would eat the first word of the title it
+      // is supposed to be improving.
+      const prefix = new RegExp(`^${filler}[、,]\\s*`);
+      if (prefix.test(out)) {
+        out = out.replace(prefix, "");
+        break;
+      }
+    }
+    if (out === before) break;
+  }
+  // Empty is a real answer: a message that was nothing but hesitation has
+  // nothing in it to name the conversation after, and the caller has a
+  // placeholder for exactly that.
+  return out;
+}
+
+function trimDangling(line: string): string {
+  let out = line.replace(DANGLING, "");
+  // One particle, not a loop: 「〜のに」 is two of these back to back and is
+  // also a real ending. Taking them off until nothing matches would eat words.
+  const shorter = out.replace(DANGLING_PARTICLE, "");
+  if (shorter.length >= 2) out = shorter;
+  return out.replace(DANGLING, "");
+}
+
+/**
+ * A session title derived from the student's first message.
+ *
+ * Rule-based on purpose. The obvious alternative is to ask the model for a
+ * summary, which reads better and costs a request per 壁打ち against a daily
+ * cap that exists to keep the β affordable — for a string whose job is to let
+ * someone pick the right row out of a list of five. Between that and 「えっと、
+ * 高校の部活の話なんですけど、3年間ず…」, most of the distance is closed by not
+ * printing the hesitation and not stopping mid-particle.
+ *
+ * The student can rename it from 履歴 either way, which is the real answer to
+ * a title that came out wrong.
+ */
 export function titleFromFirstMessage(text: string): string {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length <= 24 ? line : `${line.slice(0, 24)}…`;
+  const line = stripFillers(text.replace(/\s+/g, " ").trim());
+  if (!line) return PLACEHOLDER_TITLE;
+
+  // The first sentence, when there is one and it is not longer than the cap.
+  // A student who wrote 「部活の話です。実は去年…」 named the conversation in
+  // their first breath; there is no reason to run past it into the second.
+  const end = line.search(SENTENCE_END);
+  const sentence = end > 0 && end <= TITLE_MAX ? line.slice(0, end) : line;
+
+  if (sentence.length <= TITLE_MAX) return trimDangling(sentence) || PLACEHOLDER_TITLE;
+
+  // Too long. Prefer the last clause break inside the budget over the budget
+  // itself — 「高校の部活の話なんですけど、」 ends where the student paused, and
+  // a cut there needs no 「…」 to explain itself.
+  const head = sentence.slice(0, TITLE_MAX);
+  const clause = Math.max(head.lastIndexOf("、"), head.lastIndexOf(","));
+  if (clause >= 6) return trimDangling(head.slice(0, clause)) || PLACEHOLDER_TITLE;
+
+  const cut = trimDangling(head);
+  return cut ? `${cut}…` : PLACEHOLDER_TITLE;
 }
