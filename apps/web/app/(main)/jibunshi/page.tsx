@@ -17,7 +17,7 @@ import { sessionExists } from "@/lib/firebase/sessions";
 import type { Episode, Star } from "@/lib/firebase/schema";
 import { bucketByPeriod } from "@/lib/jibunshi-periods";
 import { useLoadable } from "@/lib/use-loadable";
-import { fs, T } from "@/lib/theme";
+import { fieldFs, fs, T } from "@/lib/theme";
 
 /** What an edit can change. The AI's tag and emotion are not the student's to retype. */
 type EpisodePatch = {
@@ -398,7 +398,10 @@ const fieldStyle: React.CSSProperties = {
   border: `1.5px solid ${T.line}`,
   background: T.bg,
   color: T.ink,
-  fontSize: fs(12.5),
+  // Shared by the text boxes and the 時期 select. fieldFs rather than fs: iOS
+  // zooms the page when a field under 16px is focused and stays zoomed, so the
+  // 自分史 was enlarging itself every time a card was corrected.
+  fontSize: fieldFs(12.5),
   lineHeight: 1.7,
   fontFamily: "inherit",
   resize: "vertical",

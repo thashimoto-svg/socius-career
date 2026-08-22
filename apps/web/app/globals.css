@@ -152,16 +152,34 @@ body {
 
   Focus rather than a measured keyboard height, because there is no reliable
   measurement: iOS pans and Android resizes, and the one thing that means the
-  keyboard is up on both is that a text field on a phone has focus. `input:`
-  specifically — tapping 送信 moves focus to the button and closes the keyboard,
-  and a bare `:focus` would leave the tabs hidden after it.
+  keyboard is up on both is that a text field on a phone has focus.
+  `textarea:` specifically — tapping 送信 moves focus to the button and closes
+  the keyboard, and a bare `:focus` would leave the tabs hidden after it. It was
+  `input:` until the composer grew a second line (β報告 8/18); an `<input>` has
+  nowhere to put one.
 
   Phones only. From 768px up there is no tab bar and no on-screen keyboard.
 */
 @media (max-width: 767px) {
-  body:has(.sc-composer input:focus) .sc-tabs {
+  body:has(.sc-composer textarea:focus) .sc-tabs {
     display: none;
   }
+}
+
+/*
+  The floor iOS needs on anything typed into.
+
+  Safari zooms the page when a focused field's text is under 16px, and leaves
+  it zoomed afterwards — the 「入力時に勝手に拡大される」 report (β 8/18). Every
+  field in the app sets its size inline through fieldFs() in lib/theme.ts,
+  which wins over this rule; this is the backstop for the next field somebody
+  adds without it. Checkboxes and radios are excluded because they hold no text
+  to zoom towards, and a font size on them changes their box.
+*/
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+select {
+  font-size: max(16px, calc(12.5px * var(--sc-font-scale, 1)));
 }
 
 /* Shippori Mincho — used for display headings and student's own words. */

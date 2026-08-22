@@ -1,5 +1,6 @@
 /**
- * Offline checks for firestore.rules — the usage document specifically.
+ * Offline checks for firestore.rules — the two places where a rule is the whole
+ * access boundary rather than a backstop behind a trusted server.
  *
  * That document is the one place where an access-control decision and a cost
  * decision meet. It holds two counters written by two different code paths for
@@ -51,9 +52,24 @@ const ME = "student-a";
 const OTHER = "student-b";
 const DAY = "2026-08-12";
 const usagePath = (uid = ME) => `users/${uid}/usage/${DAY}`;
-
 const SESSION = "session-1";
+const msgPath = (id, uid = ME) => `users/${uid}/sessions/${SESSION}/messages/${id}`;
 const sessionPath = (uid = ME) => `users/${uid}/sessions/${SESSION}`;
+
+/** A sheet the rules should accept, as the server writes it. */
+const SHEET = {
+  phase: "深掘り",
+  episode: "居酒屋のホールでの2年間",
+  situation: "大学2年、週4回のホール",
+  task: "忙しい時間帯に注文が詰まっていた",
+  action: "ドリンク担当を固定する案を出した",
+  result: "提供時間が半分になった",
+  learning: "やってみせるのが早いと分かった",
+  motive: "困っている人がそのままなのが落ち着かない",
+  facts: ["ドリンク提供時間が半分に", "週4回のシフト"],
+  pending: ["高校の部活の話"],
+};
+
 const messagePath = (uid = ME, messageId = "message-1") =>
   `users/${uid}/sessions/${SESSION}/messages/${messageId}`;
 const episodePath = (uid = ME) => `users/${uid}/episodes/episode-1`;
@@ -89,6 +105,36 @@ async function seed(data) {
 async function fresh(data) {
   await env.clearFirestore();
   if (data) await seed(data);
+}
+
+/** Put a 壁打ち in place without going through the rules. */
+async function seedSession(data = {}) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), sessionPath()), {
+      title: "居酒屋の話",
+      theme: "アルバイトの経験",
+      mode: "counselor",
+      status: "open",
+      turnCount: 4,
+      episodeCount: 0,
+      extractedCount: 0,
+      progress: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...data,
+    });
+  });
+}
+
+/** Put a transcript line in place without going through the rules. */
+async function seedMessage(id, data) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), msgPath(id)), {
+      mode: null,
+      createdAt: new Date(),
+      ...data,
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +329,202 @@ await ok("本人は自分のエピソードを削除できる(既存のまま)",
 await freshSessions();
 await ok("他人のエピソードは削除できない", () =>
   assertFails(deleteDoc(doc(theirs(), episodePath(ME)))),
+);
+
+console.log("\n本文の訂正 — 直せるのは自分の言葉だけ");
+// ---------------------------------------------------------------------------
+
+/*
+  The transcript is the evidence the 自分史 is extracted from, and it was
+  append-only for that reason. Letting the student fix their own typo (β報告
+  8/18) opens exactly one hole in that, and everything below is about how far
+  the hole goes: their own turns, their own words, and never silently.
+*/
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活でリーダーをやってました" });
+await ok("自分の発言は直せる", () =>
+  assertSucceeds(
+    updateDoc(doc(mine(), msgPath("m1")), { text: "部活で副キャプテンをやってました", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await ok("選択肢つきのAI発言を書ける", () =>
+  assertSucceeds(
+    setDoc(doc(mine(), msgPath("m3")), {
+      role: "ai",
+      text: "どちらの話から聞かせてもらえますか",
+      mode: "counselor",
+      choices: ["部活の話", "アルバイトの話"],
+      createdAt: new Date(),
+    }),
+  ),
+);
+
+await fresh();
+await ok("選択肢が5つは弾かれる", () =>
+  assertFails(
+    setDoc(doc(mine(), msgPath("m3")), {
+      role: "ai",
+      text: "どれですか",
+      mode: "counselor",
+      choices: ["1", "2", "3", "4", "5"],
+      createdAt: new Date(),
+    }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活でリーダーをやってました" });
+await ok("editedAt 無しでは直せない(黙って書き換えられない)", () =>
+  assertFails(updateDoc(doc(mine(), msgPath("m1")), { text: "書き換え" })),
+);
+
+await fresh();
+await seedMessage("m2", { role: "ai", text: "どんな部活でしたか?", mode: "counselor" });
+await ok("AIの発言は直せない(言われたことの記録)", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m2")), { text: "でっちあげ", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("role は変えられない(自分の発言をAIの発言にできない)", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { role: "ai", text: "AIが言ったこと", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("createdAt は変えられない(並び順は動かせない)", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { createdAt: new Date(2020, 0, 1), editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("空文字にはできない", () =>
+  assertFails(updateDoc(doc(mine(), msgPath("m1")), { text: "", editedAt: new Date() })),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("8000字を超えては書けない", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { text: "あ".repeat(8001), editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("知らないフィールドは足せない", () =>
+  assertFails(
+    updateDoc(doc(mine(), msgPath("m1")), { text: "直した", editedAt: new Date(), evil: true }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("他人の発言は直せない", () =>
+  assertFails(
+    updateDoc(doc(theirs(), msgPath("m1", ME)), { text: "横取り", editedAt: new Date() }),
+  ),
+);
+
+await fresh();
+await seedMessage("m1", { role: "user", text: "部活の話" });
+await ok("自分の発言は消せる", () => assertSucceeds(deleteDoc(doc(mine(), msgPath("m1")))));
+
+await fresh();
+await seedMessage("m2", { role: "ai", text: "どんな部活でしたか?" });
+await ok("直後のAI応答も消せる(発言と応答は対で消える)", () =>
+  assertSucceeds(deleteDoc(doc(mine(), msgPath("m2")))),
+);
+
+// ---------------------------------------------------------------------------
+console.log("\nエピソードシート — 二人が書く一枚");
+// ---------------------------------------------------------------------------
+
+/*
+  この欄はサーバー(app/api/chat が学生自身のIDトークンで REST 経由)と学生本人の
+  両方が書く。片方だけを信じられる経路が無いので、形の保証はルールにしかない。
+  中身は検閲しない——学生が話した内容がそのまま入る欄で、書ける値を絞る意味が
+  ないため。効いてほしいのは、見知らぬキーが増えないことと、青天井に伸びないこと。
+*/
+
+await fresh();
+await seedSession();
+await ok("シートを書ける", () =>
+  assertSucceeds(updateDoc(doc(mine(), sessionPath()), { worksheet: SHEET, progress: ["situation"] })),
+);
+
+await fresh();
+await seedSession();
+await ok("知らないキーは弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), { worksheet: { ...SHEET, evil: "true" } }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("1000字を超える欄は弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), {
+      worksheet: { ...SHEET, situation: "あ".repeat(1001) },
+    }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("未回収メモが7件は弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), {
+      worksheet: { ...SHEET, pending: ["1", "2", "3", "4", "5", "6", "7"] },
+    }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("具体が13件は弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), {
+      worksheet: { ...SHEET, facts: Array.from({ length: 13 }, (_, i) => `事実${i}`) },
+    }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("シートがマップでないのは弾かれる", () =>
+  assertFails(updateDoc(doc(mine(), sessionPath()), { worksheet: "まるごと文字列" })),
+);
+
+await fresh();
+await seedSession();
+await ok("欄が文字列でないのは弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), { worksheet: { ...SHEET, episode: 7 } }),
+  ),
+);
+
+// シート以前の壁打ちは worksheet を持たない。持たないまま書き続けられること。
+await fresh();
+await seedSession();
+await ok("シートに触れない更新は通る(シート以前の壁打ち)", () =>
+  assertSucceeds(updateDoc(doc(mine(), sessionPath()), { title: "名前を変えた" })),
+);
+
+await fresh();
+await seedSession();
+await ok("他人のシートは書けない", () =>
+  assertFails(updateDoc(doc(theirs(), sessionPath(ME)), { worksheet: SHEET })),
 );
 
 await env.cleanup();

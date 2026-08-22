@@ -57,3 +57,33 @@ export type ThemeToken = keyof typeof T;
 export function fs(px: number): string {
   return `calc(${px}px * var(--sc-font-scale, 1))`;
 }
+
+/**
+ * The smallest text iOS will leave alone.
+ *
+ * Safari zooms the page when a field with text under 16px takes focus, and it
+ * does not zoom back out afterwards. What the student sees is the app jumping
+ * a step larger the moment they tap the box, then staying there — the 「入力時
+ * に勝手に拡大される」 report (β, 8/18). There is no way to switch that off
+ * that is not also switching off pinch-to-zoom, which is a real accessibility
+ * control and not ours to take.
+ *
+ * So the fields meet the threshold instead.
+ */
+const NO_ZOOM_PX = 16;
+
+/**
+ * A font size for something the student types into.
+ *
+ * A floor rather than a fixed 16, so 「大」 still enlarges the box it is typed
+ * in — the setting means the whole app, and a field that ignored it would be
+ * the one place the student's own words stayed small. 「小」 stops at the
+ * threshold, because below it the size is not a preference any more, it is a
+ * zoom the browser performs on their behalf.
+ *
+ * Every `<input>`, `<textarea>` and `<select>` carrying text uses this rather
+ * than fs(). Checkboxes do not — there is no text in them to zoom towards.
+ */
+export function fieldFs(px: number): string {
+  return `max(${NO_ZOOM_PX}px, ${fs(px)})`;
+}

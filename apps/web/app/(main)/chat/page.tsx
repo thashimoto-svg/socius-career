@@ -4,15 +4,26 @@ import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from "re
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   defaultTheme,
-  mergeProgress,
-  readProgress,
-  stripProgressMarkers,
+  EMPTY_WORKSHEET,
+  mergeWorksheet,
+  PLACEHOLDER_TITLE,
+  readReply,
+  stripReply,
   titleFromFirstMessage,
+  worksheetProgress,
 } from "@socius/prompts";
 import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
 import { Bubble } from "@/components/Bubble";
+import {
+  CopyMessageButton,
+  MessageActionButton,
+  MessageActions,
+} from "@/components/MessageActions";
+import { MessageDeleteDialog, MessageEdit } from "@/components/MessageEdit";
 import { ProgressRail } from "@/components/ProgressRail";
+import { ReplyChoices } from "@/components/ReplyChoices";
+import { WorksheetPanel } from "@/components/WorksheetPanel";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
 import { useBeforeLeave } from "@/components/leave-guard";
@@ -21,18 +32,23 @@ import { useAuth } from "@/lib/firebase/auth-context";
 import { AD_INTERVAL, adSlotFollows } from "@/lib/ads";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
 import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
-import type { ProgressStep } from "@socius/prompts";
+import type { Worksheet } from "@socius/prompts";
 import {
   openChat,
   appendMessage,
-  saveProgress,
+  deleteMessages,
+  editUserMessage,
+  getOlderMessages,
+  getWholeTranscript,
+  saveWorksheet,
   updateSessionMeta,
 } from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
 import { startChat } from "@/lib/new-chat";
 import { useLoadable } from "@/lib/use-loadable";
+import { PHYSICAL_KEYBOARD_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { ApiError, postStream } from "@/lib/api-client";
-import { fs, T } from "@/lib/theme";
+import { fieldFs, fs, T } from "@/lib/theme";
 
 export default function ChatPage() {
   // useSearchParams needs a boundary for the shell to be prerendered.
@@ -42,6 +58,38 @@ export default function ChatPage() {
     </Suspense>
   );
 }
+
+/**
+ * How many bubbles are on screen when a 壁打ち opens.
+ *
+ * Reading the transcript is not what made re-opening a long conversation slow;
+ * drawing it was. Every bubble carries the `sc-fade` entrance, so a hundred of
+ * them meant a hundred simultaneous animations on a phone, under a smooth
+ * scroll travelling the whole length of the thread to reach the bottom.
+ *
+ * A student re-opening a 壁打ち is there to continue it, so the end is what
+ * they need drawn. The rest is one tap away and costs nothing until it is
+ * asked for.
+ */
+const VISIBLE_STEP = 40;
+
+/**
+ * How tall the composer is allowed to grow before it scrolls instead.
+ *
+ * The box has to grow, or 「Enterで改行」 gives the student a second line they
+ * cannot see. It must not grow without limit either: the keyboard already has
+ * most of the screen, and a composer that keeps taking the rest would push the
+ * question being answered off the top of it.
+ */
+const COMPOSER_MAX_HEIGHT = 132;
+
+/**
+ * How close to the bottom still counts as being at the bottom.
+ *
+ * A reply arriving while the student is reading back through the conversation
+ * must not yank them to the end of it.
+ */
+const NEAR_BOTTOM_PX = 120;
 
 function ChatScreen() {
   const router = useRouter();
@@ -70,6 +118,35 @@ function ChatScreen() {
     theme: string;
   } | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
+  /** False when older lines exist above what has been read. */
+  const [complete, setComplete] = useState(true);
+  /** How many of the loaded lines are folded away above the visible ones. */
+  const [hidden, setHidden] = useState(0);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  /** The student's own turn being corrected, and the one being deleted. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** ここまでの整理を開いているか、そして保存の途中か。 */
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [savingSheet, setSavingSheet] = useState(false);
+  const [sheetError, setSheetError] = useState<string | null>(null);
+
+  /**
+   * On a phone, Enter is 改行 and 送信 is the button — nothing else.
+   *
+   * 「スマホで改行できない」 (β報告). The box was an `<input>`, which has no
+   * second line to break to, inside a `<form>`, where Enter submits. Both
+   * halves of that had to go: a `<textarea>` so there is somewhere for the
+   * line to go, and no implicit submit so that pressing 改行 does not send.
+   *
+   * The desktop convention stays, because on a desktop it is the right one:
+   * Enter sends, Shift+Enter breaks the line. What decides which is in play is
+   * the input device, not the width of the window.
+   */
+  const enterSends = useMediaQuery(PHYSICAL_KEYBOARD_QUERY);
 
   const profile = userDoc?.profile ?? null;
   // The session document is the only source of truth for the tone, so there is
@@ -80,12 +157,62 @@ function ChatScreen() {
   const theme = defaultTheme(profile);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
-  // The 節 the conversation has covered, mirrored out of the session so the
-  // reply handler can merge into it. A ref rather than a dependency: taking the
-  // session would rebuild requestReply on every turn, and the effect that opens
-  // the conversation watches it.
-  const progressRef = useRef<ProgressStep[]>([]);
+  /**
+   * Whether the first paint of this 壁打ち has happened.
+   *
+   * The jump to the bottom on open has to be instant. Smooth means animating
+   * the length of the whole transcript, which on a conversation of any size is
+   * seconds of the screen scrolling past on its own before it settles — and
+   * what the student sees while it does is the beginning of a thread they
+   * opened to continue.
+   */
+  const settled = useRef(false);
+
+  /**
+   * Lines that arrived while this screen was open.
+   *
+   * The entrance animation belongs to a message appearing, not to a message
+   * being present: it is how a new turn announces itself. Playing it for every
+   * line of a transcript that was already there is the same animation used to
+   * say something it is not true.
+   */
+  const fresh = useRef(new Set<string>());
+
+  /**
+   * The turn being generated right now, so it can be cut off.
+   *
+   * Aborting the fetch closes the connection, and /api/chat watches
+   * `request.signal` — so 停止 stops the model rather than only stopping the
+   * screen from showing what it says. The tokens spent up to that point are
+   * still recorded there; they were still generated.
+   */
+  const inFlight = useRef<AbortController | null>(null);
+
+  /**
+   * Which 壁打ち is on screen right now.
+   *
+   * A turn takes seconds and switching threads takes one tap, so a reply can
+   * land after the student has moved on. It is saved to the conversation that
+   * asked for it either way — `sessionId` is a parameter, not read from
+   * state — but everything the *screen* does with it has to be checked against
+   * this first. Without it, A's reply was appended to B's transcript on screen,
+   * and B's next request was built from a line that is not in B.
+   */
+  const shownId = useRef<string | null>(null);
+
+  /**
+   * エピソードシート、返答ハンドラの手元の写し。
+   *
+   * A ref rather than a dependency: taking it off the session would rebuild
+   * requestReply on every turn, and the effect that opens the conversation
+   * watches that. It is also what is *sent* — the sheet travels with each
+   * request, so this has to be the same object the screen is showing, including
+   * whatever the student has just edited by hand.
+   */
+  const sheetRef = useRef<Worksheet>(EMPTY_WORKSHEET);
 
   // Which conversation to show: the one a link pointed at, otherwise the most
   // recent unfinished 壁打ち, otherwise a new one. Loaded the same way every
@@ -96,7 +223,7 @@ function ChatScreen() {
     (uid) =>
       openChat(uid, {
         resumeId,
-        fallback: { title: "新しい壁打ち", theme, mode: "counselor" },
+        fallback: { title: PLACEHOLDER_TITLE, theme, mode: "counselor" },
       }),
     {
       message: "壁打ちを読み込めませんでした。",
@@ -108,6 +235,12 @@ function ChatScreen() {
   const requestReply = useCallback(
     async (sessionId: string, transcript: Message[], tone: ChatMode, theme: string) => {
       if (!user) return;
+      const controller = new AbortController();
+      inFlight.current = controller;
+      // Whether this turn is still the one the screen is showing. Checked after
+      // every await, because each of them is long enough for the student to
+      // have gone somewhere else.
+      const onScreen = () => shownId.current === sessionId;
       setThinking(true);
       setError(null);
       setFailedTurn(null);
@@ -120,17 +253,27 @@ function ChatScreen() {
             mode: tone,
             theme,
             profile,
+            // The sheet goes up with the turn and comes back written on. The
+            // id goes with it because the writing back happens on the server —
+            // it is the side that has the reply before the tags come off.
+            sessionId,
+            worksheet: sheetRef.current,
             messages: transcript.map((m) => ({ role: m.role, text: m.text })),
           },
-          (delta) => setStreaming((prev) => prev + delta),
+          (delta) => onScreen() && setStreaming((prev) => prev + delta),
+          controller.signal,
         );
 
-        // The progress markers come off here, before anything is written down.
-        // Nothing downstream — the transcript, the 自分史 extraction, the next
-        // request's history — ever sees one, so there is exactly one place that
-        // has to get the stripping right.
-        const { text, steps } = readProgress(raw);
+        // The tags come off here, before anything is written down. Nothing
+        // downstream — the transcript, the 自分史 extraction, the next request's
+        // history — ever sees one, so there is exactly one place that has to
+        // get the stripping right.
+        const { text, sheet, choices } = readReply(raw);
         if (!text) {
+          // 停止 pressed before anything arrived. Nothing was said, so there is
+          // nothing to write down and nothing to apologise for — the student
+          // asked for this and the composer is already theirs again.
+          if (controller.signal.aborted) return;
           // A reply that was nothing but markers. Retryable, because it is the
           // model having a bad turn rather than anything about this student.
           throw new ApiError(502, "返答を受け取れませんでした。もう一度お試しください。");
@@ -142,24 +285,35 @@ function ChatScreen() {
           role: "ai",
           text,
           mode: tone,
+          choices,
         });
-        setMessages((prev) => [...prev, saved]);
-
-        const merged = mergeProgress(progressRef.current, steps);
-        if (merged.length !== progressRef.current.length) {
-          progressRef.current = merged;
-          setSession((prev) =>
-            prev && prev.id === sessionId ? { ...prev, progress: merged } : prev,
-          );
-          // Losing this costs the rail its memory the next time the 壁打ち is
-          // opened, and nothing else — the conversation is already saved. Not
-          // worth an error the student has to read, and not worth failing the
-          // turn over, so it is logged.
-          void saveProgress(user.uid, sessionId, merged).catch((e) =>
-            console.error("[progress] 進捗を保存できませんでした", e),
-          );
+        // Written to Firestore regardless — the conversation that asked for
+        // this reply gets it whether or not anyone is looking. Only the screen
+        // is conditional.
+        if (onScreen()) {
+          fresh.current.add(saved.id);
+          setMessages((prev) => [...prev, saved]);
         }
+
+        // The same merge the server just did, on the same two inputs, so the
+        // screen shows what was stored without waiting to be told. Not written
+        // from here: /api/chat saves the sheet as the side that read it whole,
+        // and two writers of one field is a way to lose a turn's work to a race
+        // nobody can see.
+        const merged = mergeWorksheet(sheetRef.current, sheet);
+        sheetRef.current = merged;
+        setSession((prev) =>
+          prev && prev.id === sessionId
+            ? { ...prev, worksheet: merged, progress: worksheetProgress(merged) }
+            : prev,
+        );
       } catch (e) {
+        if (!onScreen()) {
+          // A failure in a conversation the student has left. Logged, because
+          // 再送 would be a button on somebody else's screen.
+          console.error("[chat] 離れた壁打ちの返答に失敗しました", e);
+          return;
+        }
         setError(e instanceof Error ? e.message : "応答に失敗しました。");
         // 再送 only where sending it again could work. The daily cap will fail
         // the same way until the date changes, and a button that promises
@@ -168,12 +322,33 @@ function ChatScreen() {
           setFailedTurn({ sessionId, transcript, tone, theme });
         }
       } finally {
-        setThinking(false);
-        setStreaming("");
+        // Only if this is still the turn in flight. A stopped turn is followed
+        // immediately by whatever the student does next, and clearing a newer
+        // turn's controller from an older turn's finally would leave 停止 with
+        // nothing to pull.
+        if (inFlight.current === controller) inFlight.current = null;
+        // The screen belongs to whatever is on it now. A turn that outlived
+        // the conversation it was asked in must not take 「考えています…」 away
+        // from the one that replaced it.
+        if (onScreen()) {
+          setThinking(false);
+          setStreaming("");
+        }
       }
     },
     [user, profile],
   );
+
+  /**
+   * 停止 — cut the reply off where it is.
+   *
+   * What has already been said is kept: postStream returns the partial text
+   * instead of throwing, and it is saved to Firestore like any other reply.
+   * Discarding it would be the tidier code and the worse conversation — the
+   * student read those lines, and a transcript that does not contain them is
+   * one the next turn cannot refer back to.
+   */
+  const stopReply = () => inFlight.current?.abort();
 
   // The opening line needs the current tone and profile, but neither may be a
   // dependency of the effect below: a new identity for either would re-open the
@@ -201,11 +376,43 @@ function ChatScreen() {
     // Switching threads from the drawer would otherwise leave the previous
     // conversation on screen under the new session's header until its
     // transcript arrived.
+    // Before anything else: a turn still in flight for the previous 壁打ち
+    // checks this to know it is no longer the conversation on screen.
+    const left = shownId.current !== null && shownId.current !== (loaded?.session.id ?? null);
+    shownId.current = loaded?.session.id ?? null;
+
+    if (left) {
+      // The reply being written for the conversation just left is cut off, the
+      // same way 停止 cuts one off: whatever had arrived is saved to the 壁打ち
+      // it belongs to, and nothing is spent generating the rest of an answer
+      // nobody is going to read.
+      //
+      // Guarded on the session having actually changed, not run every time this
+      // effect does. React mounts every component twice in development and both
+      // runs see the same loaded value — an unguarded abort here would have the
+      // second run kill the opening line the first run just asked for, and
+      // `primed` would then refuse to ask again.
+      inFlight.current?.abort();
+      inFlight.current = null;
+      setThinking(false);
+    }
+
     setSession(loaded?.session ?? null);
     setMessages(loaded?.messages ?? []);
+    setComplete(loaded?.complete ?? true);
+    setHidden(Math.max(0, (loaded?.messages.length ?? 0) - VISIBLE_STEP));
+    setEditingId(null);
+    setDeletingId(null);
+    // 別の壁打ちの整理を、前の壁打ちの整理として開いたままにしない。
+    setSheetOpen(false);
+    setSheetError(null);
     setStreaming("");
     setError(null);
-    progressRef.current = loaded?.session.progress ?? [];
+    sheetRef.current = loaded?.session.worksheet ?? EMPTY_WORKSHEET;
+    // A different conversation is a different first paint: it lands at the
+    // bottom without animating, and none of its lines are new.
+    settled.current = false;
+    fresh.current.clear();
 
     if (!loaded || loaded.messages.length > 0) return;
     if (primed.current.has(loaded.session.id)) return;
@@ -219,9 +426,71 @@ function ChatScreen() {
     );
   }, [opened.data]);
 
+  /**
+   * Whether the student is reading the end of the conversation.
+   *
+   * Read from a scroll listener into a ref rather than measured where it is
+   * needed, because most of the things that want to know are *resizes* — the
+   * keyboard opening, the composer growing a line — and by the time a resize
+   * handler runs, the box has already changed size and the measurement is of
+   * the world after the event rather than before it. The ref still holds the
+   * answer from before, which is the one that decides whether following the
+   * bottom is helpful or rude.
+   */
+  const wasAtBottom = useRef(true);
+
+  /**
+   * One scroll the student asked for, whatever they were reading.
+   *
+   * Set only by 送信. 「貼り付けたら画面が一番下に飛ぶ」 (β報告) was this screen
+   * chasing the bottom on every viewport event — a paste, the keyboard, the box
+   * gaining a line — so everything else now goes through wasAtBottom and moves
+   * nothing when the student is reading further up. Sending is different: they
+   * have just added the line at the end, and it is the line they want to see.
+   */
+  const sending = useRef(false);
+
+  const stickToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+    wasAtBottom.current = true;
+  }, []);
+
+  const onTranscriptScroll = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    wasAtBottom.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  };
+
+  // Keyed on the last message rather than on the array: loading older lines
+  // grows `messages` at the *front*, and following that to the bottom would
+  // throw the student back out of the part of the thread they just asked to
+  // see.
+  const lastId = messages.length > 0 ? messages[messages.length - 1].id : null;
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, thinking, streaming]);
+    // The first paint of a 壁打ち always lands at the end, and lands there
+    // instantly — smooth would animate the length of the whole transcript with
+    // the beginning of the thread on screen while it travelled.
+    if (!settled.current) {
+      stickToBottom();
+      settled.current = true;
+      return;
+    }
+    if (!sending.current && !wasAtBottom.current) return;
+    sending.current = false;
+    stickToBottom("smooth");
+  }, [lastId, thinking, stickToBottom]);
+
+  // A reply lands a few characters at a time, and 「smooth」 on each of them is
+  // a new scroll animation per token — the single most expensive thing this
+  // screen does. Instant, and only while the student is actually at the end:
+  // scrolling back to re-read something mid-reply must not be undone by the
+  // next token.
+  useEffect(() => {
+    if (!streaming || !wasAtBottom.current) return;
+    stickToBottom();
+  }, [streaming, stickToBottom]);
 
   // The keyboard opening takes about half the transcript away, and what it
   // takes is the bottom half — the last thing the AI asked. The shell resizing
@@ -234,17 +503,216 @@ function ChatScreen() {
     if (!visual) return;
     const stayAtBottom = () => {
       if (!document.activeElement?.closest(".sc-composer")) return;
-      bottomRef.current?.scrollIntoView({ block: "end" });
+      // Only for a student who was already reading the end. This fires on far
+      // more than the keyboard opening — a paste raises iOS's own bubble, and
+      // every one of those events used to be answered by jumping to the bottom
+      // of the conversation, which is 「貼り付け時に画面が最下部へ飛ぶ」.
+      if (!wasAtBottom.current) return;
+      stickToBottom();
     };
     visual.addEventListener("resize", stayAtBottom);
     return () => visual.removeEventListener("resize", stayAtBottom);
-  }, []);
+  }, [stickToBottom]);
 
-  const send = async () => {
-    const text = draft.trim();
+  /**
+   * Enter, and what it means here.
+   *
+   * Three things have to be true at once before it sends: the student is on a
+   * real keyboard, they are not holding Shift, and — the one that is easy to
+   * forget in a Japanese app — the IME is not mid-conversion. Enter is how a
+   * candidate is *chosen*, so without the composition check every 漢字 the
+   * student picks would send the half-written sentence it was picked in.
+   */
+  const onComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey || !enterSends) return;
+    if (e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    send();
+  };
+
+  // The box is one line tall until it is not. Measured rather than counted,
+  // because a wrapped line is a line too and the student never pressed 改行 for
+  // it.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+    // A line gained here is a line the transcript loses. Someone reading the
+    // end keeps reading the end; someone reading further up is left where they
+    // were, because a box growing under them is not a reason to move.
+    if (wasAtBottom.current) stickToBottom();
+  }, [draft, stickToBottom]);
+
+  /**
+   * Show more of the conversation — 「以前のメッセージを読み込む」.
+   *
+   * One control for two things that look identical from the outside: unfolding
+   * lines that were read but not drawn, and fetching the page above them once
+   * there are none left. The student is asking to see further back either way,
+   * and which side of that line they are on is not their problem.
+   */
+  const revealOlder = async () => {
+    if (hidden > 0) {
+      setHidden((n) => Math.max(0, n - VISIBLE_STEP));
+      return;
+    }
+    if (complete || loadingOlder || !user || !session) return;
+
+    const oldest = messages[0]?.createdAt;
+    // A message still carrying a pending server timestamp has nothing to
+    // cursor on; it is also, by definition, the newest thing here.
+    if (!oldest) return;
+
+    setLoadingOlder(true);
+    try {
+      const page = await getOlderMessages(user.uid, session.id, oldest);
+      setMessages((prev) => [...page.messages, ...prev]);
+      setComplete(page.complete);
+      // The page arrives above what is on screen; one step of it is unfolded
+      // and the rest waits, exactly as it does on open.
+      setHidden(Math.max(0, page.messages.length - VISIBLE_STEP));
+    } catch (e) {
+      console.error("[chat] 以前のメッセージを読み込めませんでした", e);
+      setError("以前のメッセージを読み込めませんでした。もう一度お試しください。");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  /**
+   * Save a correction to one of the student's own turns.
+   *
+   * Local state moves with it rather than being re-read: the transcript on
+   * screen is the transcript the next request is built from, so the two have
+   * to be the same object. `editedAt` is stamped by the server and read back
+   * on the next open; a Date now is close enough for the 「編集済み」 that has
+   * to appear immediately.
+   */
+  const saveEdit = async (messageId: string, text: string) => {
+    if (!user || !session) return;
+    setSavingEdit(true);
+    setError(null);
+    try {
+      await editUserMessage(user.uid, session.id, messageId, text);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, text, editedAt: new Date() } : m)),
+      );
+      setEditingId(null);
+    } catch (e) {
+      console.error("[chat] 発言を編集できませんでした", e);
+      setError("発言を編集できませんでした。通信状況を確認して、もう一度お試しください。");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  /**
+   * 学生が直した整理を保存する。
+   *
+   * ローカルの写しも同時に動かす。次の依頼に同封されるのは sheetRef のほうで、
+   * Firestoreに書けたのに送るものが古いままだと、直したはずの欄をAIがもう一度
+   * 上書きしてくる——学生から見れば「直しても戻る」になる。
+   */
+  const saveSheet = async (next: Worksheet) => {
+    if (!user || !session) return;
+    setSavingSheet(true);
+    setSheetError(null);
+    try {
+      await saveWorksheet(user.uid, session.id, next);
+      sheetRef.current = next;
+      setSession((prev) =>
+        prev && prev.id === session.id
+          ? { ...prev, worksheet: next, progress: worksheetProgress(next) }
+          : prev,
+      );
+      setSheetOpen(false);
+    } catch (e) {
+      console.error("[worksheet] 整理を保存できませんでした", e);
+      setSheetError("保存できませんでした。通信状況を確認して、もう一度お試しください。");
+    } finally {
+      setSavingSheet(false);
+    }
+  };
+
+  /**
+   * The turn being deleted, and the reply it drew.
+   *
+   * Only an AI line *immediately* after it: a student who sent two messages in
+   * a row before the model answered owns both of them, and the reply belongs to
+   * the second.
+   */
+  const deletionOf = (messageId: string) => {
+    const at = messages.findIndex((m) => m.id === messageId);
+    if (at < 0) return null;
+    const next = messages[at + 1];
+    const ids = [messageId];
+    if (next?.role === "ai") ids.push(next.id);
+    return { at, ids };
+  };
+
+  const confirmDelete = async () => {
+    if (!user || !session || !deletingId) return;
+    const target = deletionOf(deletingId);
+    if (!target) {
+      setDeletingId(null);
+      return;
+    }
+
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      // Lines removed from before the extraction mark have to come off it, or
+      // it points past the end of a conversation that is now shorter and the
+      // 自分史 quietly reads nothing new until the transcript grows back past
+      // it. Only computable while the whole transcript is on screen: with a
+      // tail loaded, `at` is an index into the tail and the mark counts from
+      // the beginning, so the two are not the same number. Left alone in that
+      // case, which errs towards reading too little rather than twice.
+      const extractedBefore = complete
+        ? target.ids.filter((_, i) => target.at + i < session.extractedCount).length
+        : 0;
+
+      await deleteMessages(user.uid, session.id, target.ids, {
+        // Only the student's turn moves 「N往復」; the reply was never counted.
+        userTurns: 1,
+        extractedBefore,
+      });
+
+      const gone = new Set(target.ids);
+      setMessages((prev) => prev.filter((m) => !gone.has(m.id)));
+      setSession((prev) =>
+        prev && prev.id === session.id
+          ? {
+              ...prev,
+              turnCount: Math.max(0, prev.turnCount - 1),
+              extractedCount: Math.max(0, prev.extractedCount - extractedBefore),
+            }
+          : prev,
+      );
+      setDeletingId(null);
+    } catch (e) {
+      console.error("[chat] 発言を削除できませんでした", e);
+      setDeleteError("削除できませんでした。通信状況を確認して、もう一度お試しください。");
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  /**
+   * 一つの発言を送る、唯一の道。
+   *
+   * 入力欄から送るのも、選択肢を押すのもここを通る。押された選択肢は学生の発言
+   * そのものとして扱われる——引用でも選択の記録でもなく、その人がそう言った、
+   * という一行として保存される。あとから読み返す自分史に「選択肢2を選択」と
+   * 書いてあっても、それは誰の言葉でもない。
+   */
+  const sendText = async (text: string) => {
     if (!text || !user || !session || thinking) return;
 
-    setDraft("");
+    // 送信 is the one gesture that moves the view regardless of where the
+    // student had scrolled to: the line they just wrote is at the end.
+    sending.current = true;
 
     let saved: Message;
     try {
@@ -255,18 +723,29 @@ function ChatScreen() {
       });
     } catch {
       // The message was never written, so there is nothing to resend — the
-      // student's words go back in the box they came from instead of vanishing.
+      // student's words go into the box instead of vanishing. A chip that
+      // failed to send lands there too: it is a sentence the student chose,
+      // and the composer is where a sentence waits to be sent.
       setDraft(text);
       setError("メッセージを送れませんでした。通信状況を確認して、もう一度送信してください。");
       return;
     }
 
+    fresh.current.add(saved.id);
     const next = [...messages, saved];
     setMessages(next);
 
-    // 「新しい壁打ち」 is a placeholder; the student's opening line is a better
-    // name for it in the history list.
-    if (session.title === "新しい壁打ち") {
+    // The placeholder is not a name; the student's opening line is a better
+    // one for the history list. Only ever replaced once — a title they went
+    // and corrected by hand is not a placeholder any more.
+    //
+    // Except when that opening line is one of the chips the AI just offered.
+    // 「まだ見つかっていない」 is a true answer to the first question and a
+    // useless name for the conversation: the 履歴 would fill with rows that all
+    // say the same thing, none of them about what was talked about. The
+    // placeholder waits one more turn instead.
+    const offered = messages[messages.length - 1]?.choices ?? [];
+    if (session.title === PLACEHOLDER_TITLE && !offered.includes(text)) {
       const title = titleFromFirstMessage(text);
       setSession({ ...session, title });
       void updateSessionMeta(user.uid, session.id, { title });
@@ -275,16 +754,26 @@ function ChatScreen() {
     await requestReply(session.id, next, session.mode, session.theme);
   };
 
+  const send = () => {
+    const text = draft.trim();
+    if (!text || thinking) return;
+    // Emptied before the write, not after: the box has to be usable again the
+    // moment it is tapped, and the round trip is not the student's to wait for.
+    setDraft("");
+    void sendText(text);
+  };
+
   // What automatic extraction reads, kept in a ref so the visibility listener
   // below can stay registered once instead of being torn down and rebuilt on
   // every message.
-  const current = useRef<{ session: Session | null; messages: Message[] }>({
-    session: null,
-    messages: [],
-  });
+  const current = useRef<{
+    session: Session | null;
+    messages: Message[];
+    complete: boolean;
+  }>({ session: null, messages: [], complete: true });
   useEffect(() => {
-    current.current = { session, messages };
-  }, [session, messages]);
+    current.current = { session, messages, complete };
+  }, [session, messages, complete]);
 
   /**
    * Hand the 壁打ち being left over to the background extractor.
@@ -294,21 +783,37 @@ function ChatScreen() {
    */
   const handOff = useCallback(
     (minNew: number) => {
-      const { session: leaving, messages: transcript } = current.current;
-      if (!leaving || !hasNewMaterial(leaving, transcript, minNew)) return;
+      const { session: leaving, messages: transcript, complete } = current.current;
+      if (!leaving || !user) return;
 
-      startExtraction({
-        session: leaving,
-        messages: transcript,
-        onRead: (extractedCount) =>
-          // Only if this screen is still showing the same 壁打ち — by the time
-          // this lands, the student is usually looking at a different one.
-          setSession((prev) =>
-            prev && prev.id === leaving.id ? { ...prev, extractedCount } : prev,
-          ),
-      });
+      const hand = (full: Message[]) => {
+        if (!hasNewMaterial(leaving, full, minNew)) return;
+        startExtraction({
+          session: leaving,
+          messages: full,
+          onRead: (extractedCount) =>
+            // Only if this screen is still showing the same 壁打ち — by the time
+            // this lands, the student is usually looking at a different one.
+            setSession((prev) =>
+              prev && prev.id === leaving.id ? { ...prev, extractedCount } : prev,
+            ),
+        });
+      };
+
+      // What is on screen is the end of the conversation, which is the right
+      // thing to *read* and the wrong thing to extract from: `extractedCount`
+      // counts lines from the beginning, and a STAR card needs the situation
+      // as well as the result. So a truncated view fetches the rest first.
+      // Nobody is waiting on this — it runs after the student has left.
+      if (complete) {
+        hand(transcript);
+        return;
+      }
+      void getWholeTranscript(user.uid, leaving.id)
+        .then(hand)
+        .catch((e) => console.error("[extraction] 全文を読み込めませんでした", e));
     },
-    [startExtraction],
+    [startExtraction, user],
   );
 
   /**
@@ -354,7 +859,7 @@ function ChatScreen() {
     }
   };
 
-  const streamed = stripProgressMarkers(streaming);
+  const streamed = stripReply(streaming);
 
   if (!session) {
     return opened.error ? (
@@ -401,10 +906,19 @@ function ChatScreen() {
 
       {/* Directly under the header and outside the scroller, so 「あと何を話せば
           終わりなのか」 is answered without scrolling back up for it. */}
-      <ProgressRail steps={session.progress} accent={accent} />
+      <ProgressRail
+        steps={session.progress}
+        accent={accent}
+        onOpen={() => {
+          setSheetError(null);
+          setSheetOpen(true);
+        }}
+      />
 
       {/* transcript */}
       <div
+        ref={scrollerRef}
+        onScroll={onTranscriptScroll}
         style={{
           flex: 1,
           minHeight: 0,
@@ -421,25 +935,115 @@ function ChatScreen() {
           forever, and it is gone (MTG 7/30). If the two tones need a note to
           tell them apart, the note is not the thing to fix.
         */}
-        {messages.map((m, i) => (
-          // Fragment rather than a wrapper, so the bubbles stay siblings and
-          // nothing about the transcript's layout depends on whether a slot
-          // happens to fall here.
-          <Fragment key={m.id}>
-            <Bubble who={m.role} mode={m.mode ?? mode}>
-              {m.text}
-            </Bubble>
-            {/* Every AD_INTERVAL messages, and never under the last one —
-                see adSlotFollows. The index keeps successive slots from
-                being the same card three times down one conversation. */}
-            {adSlotFollows(i, messages.length) && (
-              <AdSlot index={Math.floor(i / AD_INTERVAL)} />
-            )}
-          </Fragment>
-        ))}
+        {/* Only when there is something above. The button says 読み込む either
+            way, because whether the next lines are already in memory or still
+            in Firestore is not a distinction the student made. */}
+        {(hidden > 0 || !complete) && (
+          <button
+            type="button"
+            onClick={() => void revealOlder()}
+            disabled={loadingOlder}
+            style={{
+              display: "block",
+              margin: "0 auto 14px",
+              padding: "7px 18px",
+              borderRadius: 999,
+              border: `1px solid ${T.line}`,
+              background: T.paper,
+              color: T.sub,
+              fontSize: fs(11),
+              fontWeight: 700,
+              opacity: loadingOlder ? 0.5 : 1,
+              cursor: loadingOlder ? "default" : "pointer",
+            }}
+          >
+            {loadingOlder ? "読み込んでいます…" : "以前のメッセージを読み込む"}
+          </button>
+        )}
+
+        {/* Sliced from `hidden` rather than mapped whole, but indexed against
+            the full transcript: an ad slot's place in a conversation is where
+            it falls in the conversation, not where it falls in today's view. */}
+        {messages.slice(hidden).map((m, j) => {
+          const i = hidden + j;
+          const own = m.role === "user";
+          return (
+            // Fragment rather than a wrapper, so the bubbles stay siblings and
+            // nothing about the transcript's layout depends on whether a slot
+            // happens to fall here.
+            <Fragment key={m.id}>
+              {editingId === m.id ? (
+                <MessageEdit
+                  text={m.text}
+                  saving={savingEdit}
+                  onSave={(next) => void saveEdit(m.id, next)}
+                  onCancel={() => setEditingId(null)}
+                />
+              ) : (
+                <>
+                  <Bubble
+                    who={m.role}
+                    mode={m.mode ?? mode}
+                    fade={fresh.current.has(m.id)}
+                    edited={m.editedAt !== null}
+                  >
+                    {m.text}
+                  </Bubble>
+                  {/* Only under the student's own lines. Copying is about
+                      getting their own words back out of the app — into an ES,
+                      a document, a notes app — which is the whole point of
+                      having said them here; and correcting or removing one is
+                      only theirs to do because an AI line is the record of what
+                      was said to them, not something they wrote.
+
+                      Not while a reply is being written: the turn in flight was
+                      built from this transcript, and changing it underneath
+                      would leave what is on screen and what the model is
+                      answering as two different conversations. */}
+                  {/* 最後の一行にだけ。学生が答えたあとの吹き出しに選択肢が
+                      残っていると、もう終わった問いをもう一度聞かれているように
+                      見える。保存はされているので、開き直せばまた出る。 */}
+                  {!own && m.id === lastId && !thinking && (
+                    <ReplyChoices
+                      choices={m.choices}
+                      mode={m.mode ?? mode}
+                      disabled={editingId !== null}
+                      onChoose={(choice) => void sendText(choice)}
+                    />
+                  )}
+                  {own && (
+                    <MessageActions>
+                      <CopyMessageButton text={m.text} />
+                      <MessageActionButton
+                        label="編集"
+                        disabled={thinking}
+                        onClick={() => setEditingId(m.id)}
+                      />
+                      <MessageActionButton
+                        label="削除"
+                        tone="warn"
+                        disabled={thinking}
+                        onClick={() => {
+                          setDeleteError(null);
+                          setDeletingId(m.id);
+                        }}
+                      />
+                    </MessageActions>
+                  )}
+                </>
+              )}
+              {/* Every AD_INTERVAL messages, and never under the last one —
+                  see adSlotFollows. The index keeps successive slots from
+                  being the same card three times down one conversation. */}
+              {adSlotFollows(i, messages.length) && (
+                <AdSlot index={Math.floor(i / AD_INTERVAL)} />
+              )}
+            </Fragment>
+          );
+        })}
 
         {thinking && (
-          <Bubble who="ai" mode={mode}>
+          <Bubble who="ai" mode={mode} fade>
             {/* Markers are stripped on the way to the screen as well as on the
                 way to Firestore: a reply is rendered while it is still being
                 written, so 「[progress:situation]」 would otherwise be on screen
@@ -517,53 +1121,138 @@ function ChatScreen() {
 
             sc-composer is what globals.css watches to know the keyboard is up:
             while the field inside here has focus, the tab bar is not drawn. */}
-        <form
+        <div
           className="sc-composer sc-readable"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-          style={{ display: "flex", gap: 8, alignItems: "center" }}
+          style={{ display: "flex", gap: 8, alignItems: "flex-end" }}
         >
-          <input
+          {/*
+            A div rather than a form. A form submits on Enter wherever the
+            caret is, which is exactly the behaviour being removed — and on a
+            phone there is no second key to press instead, so the student was
+            left with a box that could not hold a second line.
+          */}
+          <textarea
+            ref={composerRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onComposerKeyDown}
+            rows={1}
             placeholder="自分の言葉で書いてみる…"
             aria-label="メッセージ"
             style={{
               flex: 1,
               minWidth: 0,
+              // Grown to fit by the effect below; the cap is what makes it
+              // scroll rather than take the screen.
+              maxHeight: COMPOSER_MAX_HEIGHT,
               padding: "11px 14px",
               borderRadius: 12,
               border: `1.5px solid ${T.line}`,
-              fontSize: fs(12.5),
+              // fieldFs, not fs: under 16px iOS zooms the whole app in the
+              // moment this takes focus, and never zooms back out.
+              fontSize: fieldFs(12.5),
+              lineHeight: 1.6,
               color: T.ink,
               background: T.bg,
               outline: "none",
+              // A textarea comes with a resize grabber and a scrollbar gutter
+              // that an input never had. Neither belongs on a chat composer.
+              resize: "none",
+              overflowY: "auto",
+              fontFamily: "inherit",
             }}
           />
-          <button
-            type="submit"
-            disabled={!draft.trim() || thinking}
-            aria-label="送信"
-            style={{
-              width: 40,
-              height: 40,
-              flexShrink: 0,
-              borderRadius: 12,
-              border: "none",
-              background: accent,
-              color: T.onAccent,
-              fontSize: fs(15),
-              fontWeight: 700,
-              opacity: draft.trim() && !thinking ? 1 : 0.45,
-              cursor: draft.trim() && !thinking ? "pointer" : "default",
-            }}
-          >
-            ↑
-          </button>
-        </form>
+          {/*
+            One button, two jobs, because they are never both available: while
+            a reply is being written there is nothing to send, and the only
+            thing the student can usefully do to the app is tell it to stop. A
+            second button beside 送信 would sit there greyed out for the whole
+            of every other moment.
+          */}
+          {thinking ? (
+            <button
+              type="button"
+              onClick={stopReply}
+              aria-label="生成を停止"
+              style={{
+                width: 40,
+                height: 40,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 12,
+                border: `1.5px solid ${T.line}`,
+                background: T.paper,
+                color: T.ink,
+                cursor: "pointer",
+              }}
+            >
+              {/* A square, which is what 停止 has looked like since cassette
+                  decks. A ✕ would read as 取り消し — as though the lines
+                  already on screen were about to be taken back. */}
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                <rect width="12" height="12" rx="2.5" fill="currentColor" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={send}
+              disabled={!draft.trim()}
+              aria-label="送信"
+              style={{
+                width: 40,
+                height: 40,
+                flexShrink: 0,
+                borderRadius: 12,
+                border: "none",
+                background: accent,
+                color: T.onAccent,
+                fontSize: fs(15),
+                fontWeight: 700,
+                opacity: draft.trim() ? 1 : 0.45,
+                cursor: draft.trim() ? "pointer" : "default",
+              }}
+            >
+              ↑
+            </button>
+          )}
+        </div>
       </div>
+
+      {sheetOpen && (
+        <WorksheetPanel
+          worksheet={session.worksheet}
+          accent={accent}
+          // 返答を書いている最中は読むだけ。いま飛んでいる依頼は古いシートで
+          // 組み立てられていて、その返答が着いたときに上書きされる——直した
+          // つもりのものが数秒後に戻るくらいなら、直せないほうがまだ正直。
+          readOnly={thinking}
+          saving={savingSheet}
+          error={sheetError}
+          onSave={(next) => void saveSheet(next)}
+          onClose={() => {
+            if (savingSheet) return;
+            setSheetOpen(false);
+            setSheetError(null);
+          }}
+        />
+      )}
+
+      {deletingId && (
+        <MessageDeleteDialog
+          withReply={(deletionOf(deletingId)?.ids.length ?? 1) > 1}
+          busy={deleteBusy}
+          error={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeletingId(null);
+            setDeleteError(null);
+          }}
+        />
+      )}
     </div>
   );
 }
