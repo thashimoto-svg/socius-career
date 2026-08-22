@@ -4,11 +4,13 @@ import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from "re
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   defaultTheme,
-  mergeProgress,
+  EMPTY_WORKSHEET,
+  mergeWorksheet,
   PLACEHOLDER_TITLE,
-  readProgress,
-  stripProgressMarkers,
+  readReply,
+  stripReply,
   titleFromFirstMessage,
+  worksheetProgress,
 } from "@socius/prompts";
 import { AdSlot } from "@/components/AdSlot";
 import { AppHeader } from "@/components/AppHeader";
@@ -20,6 +22,8 @@ import {
 } from "@/components/MessageActions";
 import { MessageDeleteDialog, MessageEdit } from "@/components/MessageEdit";
 import { ProgressRail } from "@/components/ProgressRail";
+import { ReplyChoices } from "@/components/ReplyChoices";
+import { WorksheetPanel } from "@/components/WorksheetPanel";
 import { AuthSplash } from "@/components/auth-splash";
 import { useExtraction } from "@/components/extraction-provider";
 import { useBeforeLeave } from "@/components/leave-guard";
@@ -28,7 +32,7 @@ import { useAuth } from "@/lib/firebase/auth-context";
 import { AD_INTERVAL, adSlotFollows } from "@/lib/ads";
 import { hasNewMaterial, MIN_NEW_ON_LEAVE, MIN_NEW_ON_RESUME } from "@/lib/extraction";
 import { type ChatMode, type Message, type Session } from "@/lib/firebase/schema";
-import type { ProgressStep } from "@socius/prompts";
+import type { Worksheet } from "@socius/prompts";
 import {
   openChat,
   appendMessage,
@@ -36,7 +40,7 @@ import {
   editUserMessage,
   getOlderMessages,
   getWholeTranscript,
-  saveProgress,
+  saveWorksheet,
   updateSessionMeta,
 } from "@/lib/firebase/sessions";
 import { ToneMenu } from "@/components/ToneMenu";
@@ -125,6 +129,10 @@ function ChatScreen() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** ここまでの整理を開いているか、そして保存の途中か。 */
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [savingSheet, setSavingSheet] = useState(false);
+  const [sheetError, setSheetError] = useState<string | null>(null);
 
   /**
    * On a phone, Enter is 改行 and 送信 is the button — nothing else.
@@ -195,11 +203,16 @@ function ChatScreen() {
    */
   const shownId = useRef<string | null>(null);
 
-  // The 節 the conversation has covered, mirrored out of the session so the
-  // reply handler can merge into it. A ref rather than a dependency: taking the
-  // session would rebuild requestReply on every turn, and the effect that opens
-  // the conversation watches it.
-  const progressRef = useRef<ProgressStep[]>([]);
+  /**
+   * エピソードシート、返答ハンドラの手元の写し。
+   *
+   * A ref rather than a dependency: taking it off the session would rebuild
+   * requestReply on every turn, and the effect that opens the conversation
+   * watches that. It is also what is *sent* — the sheet travels with each
+   * request, so this has to be the same object the screen is showing, including
+   * whatever the student has just edited by hand.
+   */
+  const sheetRef = useRef<Worksheet>(EMPTY_WORKSHEET);
 
   // Which conversation to show: the one a link pointed at, otherwise the most
   // recent unfinished 壁打ち, otherwise a new one. Loaded the same way every
@@ -240,17 +253,22 @@ function ChatScreen() {
             mode: tone,
             theme,
             profile,
+            // The sheet goes up with the turn and comes back written on. The
+            // id goes with it because the writing back happens on the server —
+            // it is the side that has the reply before the tags come off.
+            sessionId,
+            worksheet: sheetRef.current,
             messages: transcript.map((m) => ({ role: m.role, text: m.text })),
           },
           (delta) => onScreen() && setStreaming((prev) => prev + delta),
           controller.signal,
         );
 
-        // The progress markers come off here, before anything is written down.
-        // Nothing downstream — the transcript, the 自分史 extraction, the next
-        // request's history — ever sees one, so there is exactly one place that
-        // has to get the stripping right.
-        const { text, steps } = readProgress(raw);
+        // The tags come off here, before anything is written down. Nothing
+        // downstream — the transcript, the 自分史 extraction, the next request's
+        // history — ever sees one, so there is exactly one place that has to
+        // get the stripping right.
+        const { text, sheet, choices } = readReply(raw);
         if (!text) {
           // 停止 pressed before anything arrived. Nothing was said, so there is
           // nothing to write down and nothing to apologise for — the student
@@ -267,6 +285,7 @@ function ChatScreen() {
           role: "ai",
           text,
           mode: tone,
+          choices,
         });
         // Written to Firestore regardless — the conversation that asked for
         // this reply gets it whether or not anyone is looking. Only the screen
@@ -276,20 +295,18 @@ function ChatScreen() {
           setMessages((prev) => [...prev, saved]);
         }
 
-        const merged = mergeProgress(progressRef.current, steps);
-        if (merged.length !== progressRef.current.length) {
-          progressRef.current = merged;
-          setSession((prev) =>
-            prev && prev.id === sessionId ? { ...prev, progress: merged } : prev,
-          );
-          // Losing this costs the rail its memory the next time the 壁打ち is
-          // opened, and nothing else — the conversation is already saved. Not
-          // worth an error the student has to read, and not worth failing the
-          // turn over, so it is logged.
-          void saveProgress(user.uid, sessionId, merged).catch((e) =>
-            console.error("[progress] 進捗を保存できませんでした", e),
-          );
-        }
+        // The same merge the server just did, on the same two inputs, so the
+        // screen shows what was stored without waiting to be told. Not written
+        // from here: /api/chat saves the sheet as the side that read it whole,
+        // and two writers of one field is a way to lose a turn's work to a race
+        // nobody can see.
+        const merged = mergeWorksheet(sheetRef.current, sheet);
+        sheetRef.current = merged;
+        setSession((prev) =>
+          prev && prev.id === sessionId
+            ? { ...prev, worksheet: merged, progress: worksheetProgress(merged) }
+            : prev,
+        );
       } catch (e) {
         if (!onScreen()) {
           // A failure in a conversation the student has left. Logged, because
@@ -386,9 +403,12 @@ function ChatScreen() {
     setHidden(Math.max(0, (loaded?.messages.length ?? 0) - VISIBLE_STEP));
     setEditingId(null);
     setDeletingId(null);
+    // 別の壁打ちの整理を、前の壁打ちの整理として開いたままにしない。
+    setSheetOpen(false);
+    setSheetError(null);
     setStreaming("");
     setError(null);
-    progressRef.current = loaded?.session.progress ?? [];
+    sheetRef.current = loaded?.session.worksheet ?? EMPTY_WORKSHEET;
     // A different conversation is a different first paint: it lands at the
     // bottom without animating, and none of its lines are new.
     settled.current = false;
@@ -507,7 +527,7 @@ function ChatScreen() {
     if (e.key !== "Enter" || e.shiftKey || !enterSends) return;
     if (e.nativeEvent.isComposing) return;
     e.preventDefault();
-    void send();
+    send();
   };
 
   // The box is one line tall until it is not. Measured rather than counted,
@@ -588,6 +608,34 @@ function ChatScreen() {
   };
 
   /**
+   * 学生が直した整理を保存する。
+   *
+   * ローカルの写しも同時に動かす。次の依頼に同封されるのは sheetRef のほうで、
+   * Firestoreに書けたのに送るものが古いままだと、直したはずの欄をAIがもう一度
+   * 上書きしてくる——学生から見れば「直しても戻る」になる。
+   */
+  const saveSheet = async (next: Worksheet) => {
+    if (!user || !session) return;
+    setSavingSheet(true);
+    setSheetError(null);
+    try {
+      await saveWorksheet(user.uid, session.id, next);
+      sheetRef.current = next;
+      setSession((prev) =>
+        prev && prev.id === session.id
+          ? { ...prev, worksheet: next, progress: worksheetProgress(next) }
+          : prev,
+      );
+      setSheetOpen(false);
+    } catch (e) {
+      console.error("[worksheet] 整理を保存できませんでした", e);
+      setSheetError("保存できませんでした。通信状況を確認して、もう一度お試しください。");
+    } finally {
+      setSavingSheet(false);
+    }
+  };
+
+  /**
    * The turn being deleted, and the reply it drew.
    *
    * Only an AI line *immediately* after it: a student who sent two messages in
@@ -651,11 +699,17 @@ function ChatScreen() {
     }
   };
 
-  const send = async () => {
-    const text = draft.trim();
+  /**
+   * 一つの発言を送る、唯一の道。
+   *
+   * 入力欄から送るのも、選択肢を押すのもここを通る。押された選択肢は学生の発言
+   * そのものとして扱われる——引用でも選択の記録でもなく、その人がそう言った、
+   * という一行として保存される。あとから読み返す自分史に「選択肢2を選択」と
+   * 書いてあっても、それは誰の言葉でもない。
+   */
+  const sendText = async (text: string) => {
     if (!text || !user || !session || thinking) return;
 
-    setDraft("");
     // 送信 is the one gesture that moves the view regardless of where the
     // student had scrolled to: the line they just wrote is at the end.
     sending.current = true;
@@ -669,7 +723,9 @@ function ChatScreen() {
       });
     } catch {
       // The message was never written, so there is nothing to resend — the
-      // student's words go back in the box they came from instead of vanishing.
+      // student's words go into the box instead of vanishing. A chip that
+      // failed to send lands there too: it is a sentence the student chose,
+      // and the composer is where a sentence waits to be sent.
       setDraft(text);
       setError("メッセージを送れませんでした。通信状況を確認して、もう一度送信してください。");
       return;
@@ -682,13 +738,29 @@ function ChatScreen() {
     // The placeholder is not a name; the student's opening line is a better
     // one for the history list. Only ever replaced once — a title they went
     // and corrected by hand is not a placeholder any more.
-    if (session.title === PLACEHOLDER_TITLE) {
+    //
+    // Except when that opening line is one of the chips the AI just offered.
+    // 「まだ見つかっていない」 is a true answer to the first question and a
+    // useless name for the conversation: the 履歴 would fill with rows that all
+    // say the same thing, none of them about what was talked about. The
+    // placeholder waits one more turn instead.
+    const offered = messages[messages.length - 1]?.choices ?? [];
+    if (session.title === PLACEHOLDER_TITLE && !offered.includes(text)) {
       const title = titleFromFirstMessage(text);
       setSession({ ...session, title });
       void updateSessionMeta(user.uid, session.id, { title });
     }
 
     await requestReply(session.id, next, session.mode, session.theme);
+  };
+
+  const send = () => {
+    const text = draft.trim();
+    if (!text || thinking) return;
+    // Emptied before the write, not after: the box has to be usable again the
+    // moment it is tapped, and the round trip is not the student's to wait for.
+    setDraft("");
+    void sendText(text);
   };
 
   // What automatic extraction reads, kept in a ref so the visibility listener
@@ -787,7 +859,7 @@ function ChatScreen() {
     }
   };
 
-  const streamed = stripProgressMarkers(streaming);
+  const streamed = stripReply(streaming);
 
   if (!session) {
     return opened.error ? (
@@ -834,7 +906,14 @@ function ChatScreen() {
 
       {/* Directly under the header and outside the scroller, so 「あと何を話せば
           終わりなのか」 is answered without scrolling back up for it. */}
-      <ProgressRail steps={session.progress} accent={accent} />
+      <ProgressRail
+        steps={session.progress}
+        accent={accent}
+        onOpen={() => {
+          setSheetError(null);
+          setSheetOpen(true);
+        }}
+      />
 
       {/* transcript */}
       <div
@@ -921,6 +1000,17 @@ function ChatScreen() {
                       built from this transcript, and changing it underneath
                       would leave what is on screen and what the model is
                       answering as two different conversations. */}
+                  {/* 最後の一行にだけ。学生が答えたあとの吹き出しに選択肢が
+                      残っていると、もう終わった問いをもう一度聞かれているように
+                      見える。保存はされているので、開き直せばまた出る。 */}
+                  {!own && m.id === lastId && !thinking && (
+                    <ReplyChoices
+                      choices={m.choices}
+                      mode={m.mode ?? mode}
+                      disabled={editingId !== null}
+                      onChoose={(choice) => void sendText(choice)}
+                    />
+                  )}
                   {own && (
                     <MessageActions>
                       <CopyMessageButton text={m.text} />
@@ -1108,7 +1198,7 @@ function ChatScreen() {
           ) : (
             <button
               type="button"
-              onClick={() => void send()}
+              onClick={send}
               disabled={!draft.trim()}
               aria-label="送信"
               style={{
@@ -1130,6 +1220,25 @@ function ChatScreen() {
           )}
         </div>
       </div>
+
+      {sheetOpen && (
+        <WorksheetPanel
+          worksheet={session.worksheet}
+          accent={accent}
+          // 返答を書いている最中は読むだけ。いま飛んでいる依頼は古いシートで
+          // 組み立てられていて、その返答が着いたときに上書きされる——直した
+          // つもりのものが数秒後に戻るくらいなら、直せないほうがまだ正直。
+          readOnly={thinking}
+          saving={savingSheet}
+          error={sheetError}
+          onSave={(next) => void saveSheet(next)}
+          onClose={() => {
+            if (savingSheet) return;
+            setSheetOpen(false);
+            setSheetError(null);
+          }}
+        />
+      )}
 
       {deletingId && (
         <MessageDeleteDialog

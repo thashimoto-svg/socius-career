@@ -40,33 +40,44 @@ export function parseMessages(value: unknown): WireMessage[] {
 /**
  * How many 往復 of history the 壁打ち sends.
  *
- * Was twelve. Six now, for the β budget.
+ * Twelve, then six for the β budget, and sixteen now.
  *
- * The old note here estimated a rally at ~160 input tokens and the system
- * prompt at ~500; both were guesses, and both were wrong. Measured against
- * count_tokens on this app's own prompts, a rally is about 83 tokens and the
- * system prompt is 1,403 — so history was never the dominant cost it was
- * assumed to be, and halving it saves roughly 500 tokens a turn rather than the
- * thousands the estimate implied. It is still worth doing, and it is still the
- * smaller half of the saving; the system prompt was the expensive part, and
- * that is what the cache is for.
+ * The measured numbers behind the cut to six still hold: a rally is about 83
+ * tokens against a system prompt of 1,403, so history was never the dominant
+ * cost. What changed is what six turns did to the conversation. 「同じことを
+ * 二度聞かれる」 (β報告 8/18) is what a window looks like from the inside — at
+ * the seventh rally the fact the model is asking about has fallen off the
+ * front of its own request, so it asks again, and the student answers a
+ * question they have already answered.
  *
- * Six rallies is a deliberate floor, not a shrug: the depth ladder in
- * INVARIANT_CORE is three rungs (事実 → なぜ → 価値観), so six turns is two full
- * climbs. Fewer, and a reply could stop being able to see the fact it is
- * currently asking "why" about. The theme lives in the system prompt, so
- * dropping the oldest turns never loses what the conversation is about.
+ * Sixteen is two hours of talking rather than twenty minutes, and it is
+ * affordable because of what sits in front of it: the system prompt is cached,
+ * and so is every turn of the transcript up to the newest one (see
+ * HistoryWindow.complete). Turns past the sixteenth are read at a tenth of
+ * list price, not written out again at full.
+ *
+ * It is still a window, and a window still forgets. What stops the sixteenth
+ * rally from losing the first one is not this number but the エピソードシート,
+ * which is rewritten every turn and travels with the request whatever the
+ * window is holding.
  *
  * Firestore keeps every turn regardless; this bounds only the request.
  */
-export const HISTORY_RALLIES = 6;
+export const HISTORY_RALLIES = 16;
 
 /**
  * A second bound, on characters rather than turns.
  *
- * MAX_TEXT allows 8,000 characters per message, so twelve rallies could in
- * principle be 190,000 characters. Japanese runs about two characters per
+ * MAX_TEXT allows 8,000 characters per message, so sixteen rallies could in
+ * principle be 256,000 characters. Japanese runs about two characters per
  * token here, making this budget roughly 12,000 tokens.
+ *
+ * Left where it was when the window went from six rallies to sixteen. A real
+ * 壁打ち turn is a sentence or two — the scripted transcripts in scripts/ run
+ * about 350 characters a rally, so sixteen of them is around 5,600 and this
+ * cap is nowhere near it. What it is actually for is the student who pastes an
+ * ES draft into the box: three of those in a row is the shape that would
+ * otherwise send 24,000 characters of history behind them.
  */
 const HISTORY_CHAR_BUDGET = 24_000;
 

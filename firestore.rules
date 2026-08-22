@@ -37,13 +37,48 @@ service cloud.firestore {
       // Account deletion is a support operation for now, not a client one.
       allow delete: if false;
 
+      // エピソードシート — 会話が窓から溢れても残る、一枚の整理。
+      //
+      // 書くのは二者。返答からシートを読み取ったサーバー(app/api/chat, 学生自身の
+      // IDトークンで REST 経由)と、画面でシートを直した学生本人。どちらも同じ
+      // ドキュメントの同じフィールドを触るので、形の保証はここ一箇所にある。
+      //
+      // 中身は検閲しない。この欄には学生が話した内容がそのまま入るので、書ける値
+      // を絞ることに意味はない。効いてほしいのは形と大きさだけ——見知らぬキーが
+      // 増えないこと、一欄が青天井に伸びないこと。上限はUIが作れるもの(400字)より
+      // 意図的に上に置いてある。
+      function sheetText(name) {
+        return incoming().worksheet.get(name, '') is string
+          && incoming().worksheet.get(name, '').size() <= 1000;
+      }
+      function worksheetOk() {
+        // `is map` first, and not for tidiness: every check below reaches into
+        // the field, and reaching into a string is an *evaluation error* rather
+        // than a false. That denies the write either way today, but it is the
+        // shape that has already cost this file one bug (see 「count が無い
+        // ドキュメント」 below) — an accidental denial is one nobody can read off
+        // the rule.
+        return incoming().worksheet is map
+          && incoming().worksheet.keys().hasOnly([
+                 'phase', 'episode', 'situation', 'task', 'action',
+                 'result', 'learning', 'motive', 'facts', 'pending'
+               ])
+          && sheetText('phase') && sheetText('episode') && sheetText('situation')
+          && sheetText('task') && sheetText('action') && sheetText('result')
+          && sheetText('learning') && sheetText('motive')
+          && incoming().worksheet.get('facts', []) is list
+          && incoming().worksheet.get('facts', []).size() <= 12
+          && incoming().worksheet.get('pending', []) is list
+          && incoming().worksheet.get('pending', []).size() <= 6;
+      }
+
       match /sessions/{sessionId} {
         allow read, delete: if isOwner(uid);
         allow create, update: if isOwner(uid)
           && incoming().keys().hasOnly([
                'title', 'theme', 'mode', 'status',
                'turnCount', 'episodeCount', 'extractedCount', 'progress',
-               'createdAt', 'updatedAt'
+               'worksheet', 'createdAt', 'updatedAt'
              ])
           && incoming().title is string && incoming().title.size() <= 200
           && incoming().mode in ['counselor', 'karakuchi']
@@ -54,7 +89,10 @@ service cloud.firestore {
           // typed member by member — rules cannot check a list's elements,
           // and five is the whole vocabulary.
           && (!incoming().keys().hasAny(['progress'])
-              || (incoming().progress is list && incoming().progress.size() <= 5));
+              || (incoming().progress is list && incoming().progress.size() <= 5))
+          // Optional for the same reason: every 壁打ち that happened before the
+          // sheet existed has none, and must stay writable without a backfill.
+          && (!incoming().keys().hasAny(['worksheet']) || worksheetOk());
 
         // Messages were an append-only log, and mostly still are. The one
         // exception is the student correcting their own words (β報告 8/18):
@@ -74,11 +112,16 @@ service cloud.firestore {
         match /messages/{messageId} {
           allow read: if isOwner(uid);
           allow create: if isOwner(uid)
-            && incoming().keys().hasOnly(['role', 'text', 'mode', 'createdAt'])
+            && incoming().keys().hasOnly(['role', 'text', 'mode', 'choices', 'createdAt'])
             && incoming().role in ['user', 'ai']
             && incoming().text is string
             && incoming().text.size() > 0
-            && incoming().text.size() <= 8000;
+            && incoming().text.size() <= 8000
+            // 答え方の見本。付く回のほうが少ないので任意で、中身は見ない——
+            // 学生が押すと自分の発言として送られるものなので、上の text と
+            // 同じ性質のものが入る。効いてほしいのは数だけ。
+            && (!incoming().keys().hasAny(['choices'])
+                || (incoming().choices is list && incoming().choices.size() <= 4));
           allow update: if isOwner(uid)
             && resource.data.role == 'user'
             // Exactly these two fields moved — no more, and no fewer. `hasAll`

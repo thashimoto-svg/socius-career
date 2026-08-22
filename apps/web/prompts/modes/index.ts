@@ -1,9 +1,11 @@
 import { blocksToText, type PromptBlock } from "../cache";
-import { PROGRESS_PROTOCOL } from "../progress";
+import { CHOICES_PROTOCOL } from "../choices";
+import { WORKSHEET_PROTOCOL } from "../worksheet";
 import { INVARIANT_CORE, profileBlock, type PromptProfile } from "./core";
+import { FOCUS_PROTOCOL } from "./focus";
 import { TONES, type ToneId } from "./tones";
 
-export { INVARIANT_CORE, profileBlock, TONES };
+export { FOCUS_PROTOCOL, INVARIANT_CORE, profileBlock, TONES };
 export type { PromptProfile, ToneId };
 
 /**
@@ -43,13 +45,27 @@ export function buildChatSystemBlocks(opts: {
 
   return [
     {
-      // The progress protocol belongs in here rather than in the per-student
-      // block below: it is byte-identical for the whole cohort on both tones,
-      // so it rides the cache that is already warm instead of paying for
-      // itself on every conversation. Last, because it is the one thing in
-      // this block that is not about how to talk to the student.
+      // The two output protocols belong in here rather than in the
+      // per-student block below: they are byte-identical for the whole cohort
+      // on both tones, so they ride the cache that is already warm instead of
+      // paying for themselves on every conversation. Last, because they are
+      // the one thing in this block that is not about how to talk to the
+      // student.
+      //
+      // The sheet itself is not here. Its *rules* never change; its contents
+      // change every turn, and a block that changes every turn cannot sit in
+      // front of a cached prefix without invalidating it — so the sheet
+      // travels at the end of the request instead (see toAnthropicMessages).
       type: "text",
-      text: `${INVARIANT_CORE}\n\n${TONES[opts.mode].instruction}\n\n${PROGRESS_PROTOCOL}`,
+      text: [
+        INVARIANT_CORE,
+        // 深掘りの規律は不変の核の側。トーンで変わるのは言い方だけで、どこまで
+        // 掘るかも、掘っている途中で乗り換えないことも、両方のトーンで同じ。
+        FOCUS_PROTOCOL,
+        TONES[opts.mode].instruction,
+        CHOICES_PROTOCOL,
+        WORKSHEET_PROTOCOL,
+      ].join("\n\n"),
       cache_control: { type: "ephemeral" },
     },
     {
@@ -92,10 +108,15 @@ export function buildOpeningInstruction(): string {
 
 - 100字程度。挨拶は一言だけ。
 - 自己分析の説明や進め方の案内はしない。
-- オンボーディングの回答に触れて、そこから答えやすい事実を一つだけ聞く。
+- オンボーディングの回答に触れてから、今日話したい経験がもう決まっているかを
+  ひとつの問いで聞く。
 - 「あなたの強みは?」のような大きい問いから始めない。
-  まず思い出せる具体的な出来事を聞く。
-- 最後は必ずひとつの問いで終える。
+- 本文は必ずひとつの問いで終える。
+- 本文のあとに、次の二つを選択肢として出す。文言はこのまま変えない。
+
+[choices] 話したいエピソードがある | まだ見つかっていない [/choices]
+
+- シートは phase: 探索 で出す。まだ何も聞いていないので、他の欄は空にする。
 - プレーンな日本語の文章のみ。箇条書きや見出しは使わない。`;
 }
 
