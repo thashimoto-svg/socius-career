@@ -8,14 +8,23 @@ import {
   SessionTitleEdit,
 } from "@/components/SessionTitleEdit";
 import { ScreenError, ScreenLoading } from "@/components/screen-state";
+import { SessionDeleteButton, useSessionDelete } from "@/components/session-delete";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { listSessions } from "@/lib/firebase/sessions";
 import { formatShortDate } from "@/lib/firebase/schema";
 import { useLoadable } from "@/lib/use-loadable";
 import { fs, T } from "@/lib/theme";
 
-// Sessions are saved automatically; tapping one resumes it, so a conversation
-// is never consumed in a single sitting.
+/**
+ * 壁打ちの記録。
+ *
+ * 行は三つのことができる: 開く(カード全体)、名前を変える(✎)、消す(🗑)。三つとも
+ * 別々のターゲットで、✎ と 🗑 はカードの兄弟要素として置いてある——リンクの中の
+ * ボタンは二つではなく一つのターゲットにしかならない。
+ *
+ * 並びは 🗑 が右端、✎ がその左。消すほうを端に置いたのは、間違えたときに戻せない
+ * のがそちらだけだからで、指が滑って当たる縁から遠いのは名前のほうでよい。
+ */
 export default function HistoryPage() {
   const { user } = useAuth();
   const {
@@ -37,6 +46,11 @@ export default function HistoryPage() {
    */
   const [renamed, setRenamed] = useState<Record<string, string>>({});
 
+  // A deleted row goes the moment it is gone, without waiting for a re-read —
+  // for the same reason the renamed one does: this screen loads once.
+  const { deletedIds } = useSessionDelete();
+  const rows = sessions?.filter((s) => !deletedIds.has(s.id)) ?? null;
+
   return (
     <>
       <AppHeader title="壁打ちの記録" />
@@ -50,7 +64,7 @@ export default function HistoryPage() {
 
       {loading && <ScreenLoading />}
 
-      {sessions?.length === 0 && (
+      {rows?.length === 0 && (
         <div style={{ fontSize: fs(12.5), color: T.sub, lineHeight: 1.9 }}>
           まだ記録はありません。
           <br />
@@ -60,7 +74,7 @@ export default function HistoryPage() {
         </div>
       )}
 
-      {sessions?.map((s) => {
+      {rows?.map((s) => {
         const title = renamed[s.id] ?? s.title;
 
         if (editing === s.id && user) {
@@ -81,8 +95,8 @@ export default function HistoryPage() {
         }
 
         return (
-          // The card and its ✎ are siblings: the card is a link, and a button
-          // inside a link is one target rather than two.
+          // The card, its ✎ and its 🗑 are siblings: the card is a link, and a
+          // button inside a link is one target rather than two.
           <div key={s.id} style={{ position: "relative", marginBottom: 10 }}>
         <Link
           href={`/chat?s=${s.id}`}
@@ -99,8 +113,9 @@ export default function HistoryPage() {
             background: T.paper,
             border: `1px solid ${T.line}`,
             borderRadius: 14,
-            // Right side left clear for the ✎ so the date never runs under it.
-            padding: "13px 46px 13px 15px",
+            // Right side left clear for both the ✎ and the 🗑, so the date
+            // never runs under either.
+            padding: "13px 84px 13px 15px",
             color: T.ink,
           }}
         >
@@ -141,7 +156,11 @@ export default function HistoryPage() {
             )}
           </div>
         </Link>
-        <SessionRenameButton title={title} onClick={() => setEditing(s.id)} />
+        {/* 🗑 keeps the edge (right: 4, 34 wide), so ✎ starts clear of it. */}
+        <SessionRenameButton title={title} right={42} onClick={() => setEditing(s.id)} />
+        {/* 改名した直後に消そうとしたとき、確認ダイアログに出る名前が古いままだと
+            「どれを消すのか」を確かめる文になっていない。画面と同じ title を渡す。 */}
+        <SessionDeleteButton sessionId={s.id} title={title} />
           </div>
         );
       })}

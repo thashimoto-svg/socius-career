@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { EPISODE_PERIODS, type EpisodePeriod } from "@socius/prompts";
 import { AppHeader } from "@/components/AppHeader";
 import { JibunshiTimeline } from "@/components/JibunshiTimeline";
 import { ScreenError, ScreenLoading } from "@/components/screen-state";
+import { useSessionDelete } from "@/components/session-delete";
 import { useAuth } from "@/lib/firebase/auth-context";
 import {
   deleteEpisode,
   listEpisodes,
   updateEpisode,
 } from "@/lib/firebase/episodes";
+import { sessionExists } from "@/lib/firebase/sessions";
 import type { Episode, Star } from "@/lib/firebase/schema";
 import { bucketByPeriod } from "@/lib/jibunshi-periods";
 import { useLoadable } from "@/lib/use-loadable";
@@ -54,6 +57,57 @@ export default function JibunshiPage() {
     // Newest first, so the top card is the one they just made.
     setOpenId(loaded.data?.[0]?.id ?? null);
   }, [loaded.data]);
+
+  /**
+   * Which 壁打ち are still there to link back to.
+   *
+   * A card outlives the conversation it came from — deleting a 壁打ち leaves
+   * every episode extracted from it exactly where it was, still carrying the
+   * `sessionId` of something that no longer exists. That is the design (process
+   * is disposable, the record is not), and it means the link out of a card
+   * cannot be drawn from the id alone: it has to be asked about.
+   *
+   * Asked for the open card only, and remembered, so a 自分史 of twenty
+   * episodes is not twenty reads. Unknown reads as "do not draw it" — a link
+   * that appears and then vanishes a moment later is worse than one that
+   * arrives a moment late.
+   */
+  const [sessionAlive, setSessionAlive] = useState<Record<string, boolean>>({});
+  const asked = useRef(new Set<string>());
+  // The ☰ drawer opens over this screen, so a 壁打ち can be deleted without ever
+  // leaving the 自分史 — and the answer above was true when it was given.
+  const { deletedIds } = useSessionDelete();
+  const openEpisode = episodes?.find((e) => e.id === openId) ?? null;
+  const openSessionId = openEpisode?.sessionId ?? null;
+
+  useEffect(() => {
+    if (!user || !openSessionId) return;
+    if (asked.current.has(openSessionId)) return;
+    asked.current.add(openSessionId);
+
+    let cancelled = false;
+    void sessionExists(user.uid, openSessionId)
+      .then((exists) => {
+        // Closed the card before the answer came back. Nothing was recorded, so
+        // forget having asked — otherwise opening it again would wait on a
+        // result that has already been thrown away.
+        if (cancelled) {
+          asked.current.delete(openSessionId);
+          return;
+        }
+        setSessionAlive((prev) => ({ ...prev, [openSessionId]: exists }));
+      })
+      .catch((e) => {
+        // Not being able to ask is not the same as the 壁打ち being gone, but it
+        // has the same answer: no link. Un-asked, so the next open tries again.
+        console.error("[jibunshi] 元の壁打ちを確認できませんでした", e);
+        asked.current.delete(openSessionId);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, openSessionId]);
 
   /** Open the card the student picked off the timeline, and go to it. */
   const revealEpisode = (id: string) => {
@@ -261,7 +315,7 @@ export default function JibunshiPage() {
                 {/* Ownership: the student can edit and delete. Export lands in
                     v0.2 — until it does something, a dead button is only a
                     thing the student tries and fails to press. */}
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                   <button
                     type="button"
                     onClick={() => setEditingId(e.id)}
@@ -297,6 +351,36 @@ export default function JibunshiPage() {
                     削除する
                   </button>
                 </div>
+
+                {/*
+                  Back to where this came from — and gone entirely when the
+                  壁打ち has been deleted. A link to a conversation that no
+                  longer exists would land on a screen that quietly opens some
+                  other one, which reads as the card having been attached to the
+                  wrong thing all along. Absent is honest; broken is not.
+
+                  Drawn only once the session has been confirmed to exist, so it
+                  fades in rather than appearing and then being taken away.
+                */}
+                {e.sessionId && sessionAlive[e.sessionId] && !deletedIds.has(e.sessionId) && (
+                  <Link
+                    href={`/chat?s=${e.sessionId}`}
+                    className="sc-fade"
+                    style={{
+                      display: "block",
+                      textAlign: "center",
+                      padding: "8px 0",
+                      borderRadius: 9,
+                      border: `1.5px solid ${T.line}`,
+                      background: T.paper,
+                      color: T.primary,
+                      fontSize: fs(11.5),
+                      fontWeight: 700,
+                    }}
+                  >
+                    元の対話を見る
+                  </Link>
+                )}
               </div>
             )}
           </div>

@@ -12,11 +12,11 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  writeBatch,
   startAfter,
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
   deleteDoc,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -460,6 +460,38 @@ export async function reopenSession(
   });
 }
 
+/** Whether this 壁打ち is still there — what the 自分史 asks before linking to one. */
+export async function sessionExists(
+  uid: string,
+  sessionId: string,
+): Promise<boolean> {
+  const snap = await getDoc(sessionRef(uid, sessionId));
+  return snap.exists();
+}
+
+/**
+ * How many messages one delete pass takes.
+ *
+ * A Firestore batch holds 500 writes, and going over is a rejection of the
+ * whole batch rather than of the extra ones. 400 leaves room to be wrong about
+ * that limit without a student's longest conversation being the thing that
+ * discovers it.
+ */
+const MESSAGE_DELETE_BATCH = 400;
+
+/**
+ * Delete a 壁打ち and its transcript. The 自分史 is not touched.
+ *
+ * That asymmetry is the whole point: 壁打ち is the process and 自分史 is what
+ * the student is left with, so throwing away a conversation must never throw
+ * away the episodes extracted from it. Their `sessionId` is left pointing at a
+ * session that is gone — the 自分史 hides its 「元の対話を見る」 link when the
+ * session no longer exists rather than the episode being rewritten or dropped.
+ *
+ * Callers must abandon extraction for this session first (see
+ * `abandonExtraction`), or a run already in flight can write to the document
+ * this is removing.
+ */
 export async function deleteSession(
   uid: string,
   sessionId: string,
@@ -467,7 +499,25 @@ export async function deleteSession(
   // Firestore does not cascade; drop the transcript before the parent so a
   // failure halfway through leaves the session visible rather than orphaning
   // messages under a document that no longer exists.
-  const snap = await getDocs(messagesRef(uid, sessionId));
-  await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+  //
+  // Paged rather than read in one go: a long 壁打ち is hundreds of messages,
+  // and both the read and the batch that follows it have limits. Re-querying
+  // from the start each time is correct precisely because the previous page is
+  // gone by then.
+  for (;;) {
+    const page = await getDocs(
+      query(messagesRef(uid, sessionId), limit(MESSAGE_DELETE_BATCH)),
+    );
+    if (page.empty) break;
+
+    const batch = writeBatch(getDb());
+    for (const d of page.docs) batch.delete(d.ref);
+    await batch.commit();
+
+    // A short page is the last one. Without this the loop would spend one more
+    // round trip on every delete just to be told the collection is empty.
+    if (page.size < MESSAGE_DELETE_BATCH) break;
+  }
+
   await deleteDoc(sessionRef(uid, sessionId));
 }

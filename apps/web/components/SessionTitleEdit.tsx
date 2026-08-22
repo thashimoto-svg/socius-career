@@ -164,13 +164,20 @@ export function SessionTitleEdit({
  * A sibling of the row's link, never a child of it — a button inside a link is
  * one target rather than two. Positioned absolutely, so the list only has to
  * make its rows `relative` and pad the right edge clear.
+ *
+ * `right` exists because a row can carry more than one of these. 履歴 puts the
+ * 🗑 at the edge and this one beside it; the offset belongs to the list, which
+ * is the only place that knows what else is on the row.
  */
 export function SessionRenameButton({
   title,
   onClick,
+  right = 6,
 }: {
   title: string;
   onClick: () => void;
+  /** Distance from the row's right edge. */
+  right?: number;
 }) {
   return (
     <button
@@ -179,7 +186,7 @@ export function SessionRenameButton({
       aria-label={`「${title}」の名前を変更する`}
       style={{
         position: "absolute",
-        right: 6,
+        right,
         top: "50%",
         transform: "translateY(-50%)",
         width: 34,
