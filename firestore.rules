@@ -61,11 +61,13 @@ service cloud.firestore {
         return incoming().worksheet is map
           && incoming().worksheet.keys().hasOnly([
                  'phase', 'episode', 'situation', 'task', 'action',
-                 'result', 'learning', 'motive', 'pending'
+                 'result', 'learning', 'motive', 'facts', 'pending'
                ])
           && sheetText('phase') && sheetText('episode') && sheetText('situation')
           && sheetText('task') && sheetText('action') && sheetText('result')
           && sheetText('learning') && sheetText('motive')
+          && incoming().worksheet.get('facts', []) is list
+          && incoming().worksheet.get('facts', []).size() <= 12
           && incoming().worksheet.get('pending', []) is list
           && incoming().worksheet.get('pending', []).size() <= 6;
       }

@@ -43,6 +43,62 @@ const FIELDS: Field[] = [
   { id: "motive", label: LABELS.motive, asks: "その選択の理由" },
 ];
 
+/** 一行ぶんの、直せて消せる項目。覚えていることと、あとで聞く話に使う。 */
+function ListRow({
+  value,
+  label,
+  readOnly,
+  onChange,
+  onRemove,
+}: {
+  value: string;
+  label: string;
+  readOnly: boolean;
+  onChange: (value: string) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value.slice(0, FIELD_MAX))}
+        readOnly={readOnly}
+        aria-label={label}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          padding: "8px 11px",
+          borderRadius: 10,
+          border: `1.5px solid ${T.line}`,
+          background: readOnly ? T.bg : T.paper,
+          color: T.ink,
+          fontSize: fieldFs(12),
+          fontFamily: "inherit",
+          outline: "none",
+        }}
+      />
+      <button
+        type="button"
+        disabled={readOnly}
+        onClick={onRemove}
+        aria-label={`「${value}」を消す`}
+        style={{
+          flexShrink: 0,
+          border: "none",
+          background: "none",
+          padding: "4px 6px",
+          color: T.sub,
+          fontSize: fs(12),
+          cursor: readOnly ? "default" : "pointer",
+          opacity: readOnly ? 0.4 : 1,
+        }}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
 export function WorksheetPanel({
   worksheet,
   accent,
@@ -200,6 +256,50 @@ export function WorksheetPanel({
           })}
 
           {/*
+            落としてはいけない具体。書き直されない欄なので、間違ったまま入ると
+            会話の最後まで間違ったまま残る——直せることの値打ちが、他のどの欄より
+            高いところ。
+          */}
+          <div style={{ marginBottom: 14 }}>
+            <div
+              style={{
+                fontSize: fs(10.5),
+                fontWeight: 700,
+                color: draft.facts.length ? accent : T.sub,
+                marginBottom: 6,
+              }}
+            >
+              覚えていること(数字・固有名詞)
+            </div>
+            {draft.facts.length === 0 ? (
+              <div style={{ fontSize: fs(11), color: T.sub, lineHeight: 1.7 }}>
+                まだありません
+              </div>
+            ) : (
+              draft.facts.map((item, i) => (
+                <ListRow
+                  key={`${i}-${item}`}
+                  value={item}
+                  label={`覚えていること ${i + 1}`}
+                  readOnly={readOnly}
+                  onChange={(value) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      facts: prev.facts.map((f, j) => (j === i ? value : f)),
+                    }))
+                  }
+                  onRemove={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      facts: prev.facts.filter((_, j) => j !== i),
+                    }))
+                  }
+                />
+              ))
+            )}
+          </div>
+
+          {/*
             未回収の話題。AIが脱線を控えておく場所で、学生が足す場所ではない
             ——足せるようにすると、アプリが必ず聞き返すと約束したto-doに見える。
             消せるだけにしてあるのは、間違って控えられたものを黙らせる必要が
@@ -222,59 +322,24 @@ export function WorksheetPanel({
               </div>
             ) : (
               draft.pending.map((item, i) => (
-                <div
+                <ListRow
                   key={`${i}-${item}`}
-                  style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}
-                >
-                  <input
-                    value={item}
-                    onChange={(e) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        pending: prev.pending.map((p, j) =>
-                          j === i ? e.target.value.slice(0, FIELD_MAX) : p,
-                        ),
-                      }))
-                    }
-                    readOnly={readOnly}
-                    aria-label={`あとで聞く話 ${i + 1}`}
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      padding: "8px 11px",
-                      borderRadius: 10,
-                      border: `1.5px solid ${T.line}`,
-                      background: readOnly ? T.bg : T.paper,
-                      color: T.ink,
-                      fontSize: fieldFs(12),
-                      fontFamily: "inherit",
-                      outline: "none",
-                    }}
-                  />
-                  <button
-                    type="button"
-                    disabled={readOnly}
-                    onClick={() =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        pending: prev.pending.filter((_, j) => j !== i),
-                      }))
-                    }
-                    aria-label={`「${item}」を消す`}
-                    style={{
-                      flexShrink: 0,
-                      border: "none",
-                      background: "none",
-                      padding: "4px 6px",
-                      color: T.sub,
-                      fontSize: fs(12),
-                      cursor: readOnly ? "default" : "pointer",
-                      opacity: readOnly ? 0.4 : 1,
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
+                  value={item}
+                  label={`あとで聞く話 ${i + 1}`}
+                  readOnly={readOnly}
+                  onChange={(value) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      pending: prev.pending.map((p, j) => (j === i ? value : p)),
+                    }))
+                  }
+                  onRemove={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      pending: prev.pending.filter((_, j) => j !== i),
+                    }))
+                  }
+                />
               ))
             )}
           </div>

@@ -17,6 +17,13 @@
  * 仕組みを並走させると、埋まったと言っているのに中身が無い、あるいはその逆が起き
  * る——同じことを二度言わせて食い違わせる理由がない。
  *
+ * ── 具体が薄れていく問題 ──
+ * facts だけが append-only なのは、20往復の検証で見つけた挙動のため。毎ターン
+ * 全文を書き直させると、モデルは同じ内容を少しずつ短い言い方に置き換えていく。
+ * 一回ごとの差は小さく、どのターンのシートを読んでも間違っていない。それでも
+ * 20回重ねると「反対した3人」から3が消えている。書き直す機会が無い欄を一つ
+ * 作って、数字と固有名詞はそこに置くことにした。
+ *
  * ── 未回収の話題メモ ──
  * pending は脱線の置き場所。学生が今のエピソードの途中で別の話を持ち出したとき、
  * AIはそちらへ飛ばずにここへ控え、STARが揃ってから「先ほどの◯◯についても」と
@@ -51,6 +58,20 @@ export type Worksheet = {
    * ところだから。行動と結果だけのガクチカは誰の話でもありうる。
    */
   motive: string;
+  /**
+   * 落としてはいけない具体——数字・人数・時間・固有名詞。
+   *
+   * 他の欄と違い、**書き足すだけで書き直されない**。20往復の検証
+   * (npm run verify:memory)で最初に落ちたのがここだったので、後から足した欄。
+   * 毎ターン全文を書き直させると、モデルは同じ内容を少しずつ短い言い方に
+   * 置き換えていく。一回ごとの差は「反対した3人には個別に話を聞き」→「反対した
+   * 人には個別に話を聞き」程度で、どのターンを見ても正しいのに、20回重ねると
+   * 3が消えている。
+   *
+   * だからここだけは、モデルにその回の新しいぶんだけを書かせて、こちらで足す。
+   * 書き直す機会が無いものは、書き直されて薄まることもない。
+   */
+  facts: string[];
   /** 未回収の話題メモ。 */
   pending: string[];
 };
@@ -72,6 +93,7 @@ export const EMPTY_WORKSHEET: Worksheet = {
   result: "",
   learning: "",
   motive: "",
+  facts: [],
   pending: [],
 };
 
@@ -86,6 +108,18 @@ export const FIELD_MAX = 400;
 
 /** How many loose ends are worth carrying. */
 export const PENDING_MAX = 6;
+
+/**
+ * How many specifics travel with the conversation.
+ *
+ * Append-only means unbounded unless something says otherwise, and this rides
+ * in every request from the turn it is written. Twelve is about as many hard
+ * facts as one episode has in it; past that, what is arriving is prose.
+ */
+export const FACTS_MAX = 12;
+
+/** 一つの具体の長さ。「集合時間を10分前倒し」で足りる。 */
+const FACT_MAX = 120;
 
 /** 未回収メモの区切り。全角スラッシュも読む。 */
 const PENDING_SPLIT = /[/／]/;
@@ -129,6 +163,14 @@ export function parseWorksheet(reply: string): Partial<Worksheet> | null {
   for (const field of TEXT_FIELDS) {
     const value = fields.get(field);
     if (value !== undefined) sheet[field] = clean(value);
+  }
+
+  const facts = fields.get("facts");
+  if (facts !== undefined) {
+    sheet.facts = facts
+      .split(PENDING_SPLIT)
+      .map((item) => item.replace(/\s+/g, " ").trim().slice(0, FACT_MAX))
+      .filter((item) => item.length > 0 && item !== "なし" && item !== "-");
   }
 
   const pending = fields.get("pending");
@@ -175,8 +217,28 @@ export function mergeWorksheet(
     merged[field] = value === undefined || (value === "" && !changed) ? base[field] : value;
   }
 
+  // 足すだけ。ここが他の欄と違う唯一の場所で、違う理由は Worksheet.facts に
+  // 書いてある——書き直されないものは、書き直されて薄まらない。
+  merged.facts = dedupe([...base.facts, ...(update.facts ?? [])]).slice(0, FACTS_MAX);
   merged.pending = update.pending ?? base.pending;
   return merged;
+}
+
+/**
+ * 同じことを二度持たない。
+ *
+ * 「新しく出たぶんだけ」と言ってあっても、モデルは前の回のものを書き直して
+ * よこす回がある。完全一致だけを弾くのは意図的で、言い回しが違うものを同じと
+ * 判定しはじめると、消してはいけない具体を消す側の失敗になる。
+ */
+function dedupe(items: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.replace(/[\s、。]/g, "");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Firestore hands back whatever is in the document; keep only a real sheet. */
@@ -188,6 +250,14 @@ export function toWorksheet(value: unknown): Worksheet {
   sheet.phase = toPhase(typeof raw.phase === "string" ? raw.phase : undefined, "探索");
   for (const field of TEXT_FIELDS) {
     if (typeof raw[field] === "string") sheet[field] = clean(raw[field] as string);
+  }
+  if (Array.isArray(raw.facts)) {
+    sheet.facts = dedupe(
+      raw.facts
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.replace(/\s+/g, " ").trim().slice(0, FACT_MAX))
+        .filter((item) => item.length > 0),
+    ).slice(0, FACTS_MAX);
   }
   if (Array.isArray(raw.pending)) {
     sheet.pending = raw.pending
@@ -202,7 +272,9 @@ export function toWorksheet(value: unknown): Worksheet {
 /** Nothing has been written on it yet. */
 export function isWorksheetEmpty(sheet: Worksheet): boolean {
   return (
-    TEXT_FIELDS.every((field) => sheet[field].length === 0) && sheet.pending.length === 0
+    TEXT_FIELDS.every((field) => sheet[field].length === 0) &&
+    sheet.facts.length === 0 &&
+    sheet.pending.length === 0
   );
 }
 
@@ -236,6 +308,9 @@ export function worksheetPrompt(sheet: Worksheet): string {
   for (const field of TEXT_FIELDS) {
     if (sheet[field]) lines.push(`${field}: ${sheet[field]}`);
   }
+  if (sheet.facts.length > 0) {
+    lines.push(`facts: ${sheet.facts.join(" / ")}`);
+  }
   if (sheet.pending.length > 0) {
     lines.push(`pending: ${sheet.pending.join(" / ")}`);
   }
@@ -245,6 +320,8 @@ ${lines.join("\n")}
 
 これがこの壁打ちの記憶です。上の履歴から消えている話でも、ここに書いてあることは
 すでに聞いた話として扱ってください。同じことをもう一度聞かないでください。
+ここに書いてあることを聞き返されたら、書いてあるとおりに答えてください——
+「聞けていないかもしれません」と答えていいのは、この中に無いことだけです。
 学生が書き直した欄があれば、そちらが正しいものとして受け取ってください。`;
 }
 
@@ -268,12 +345,21 @@ action: 本人が具体的に何をしたか
 result: その行動で何がどうなったか
 learning: その経験から何を得たか、どんな価値観が出ているか
 motive: なぜそうしようと思ったのか。本人の動機
+facts: この回で新しく出た具体。数字・人数・時間・固有名詞。/ で区切る
 pending: まだ聞けていない話題。複数あれば / で区切る
 [/sheet]
 
-- **毎回、全部の行を書く。** 前の回に書いた内容は、変わっていなければそのまま
-  書き写す。このシートが会話の記憶であり、書かなかった行は次のターンのあなたに
-  届きません。
+- **毎回、全部の行を書く。** 書かなかった行は次のターンのあなたに届きません。
+- **すでに書いてある行は、一字一句そのまま書き写す。** 短くまとめ直さない。
+  新しく分かったことは、いまある文の後ろに足す形で書く。書き直すたびに少しずつ
+  短くなると、20往復のあいだに固有の事実が消えます。消えた事実は、あなたにとって
+  最初から無かったことになります。
+- **数字・人数・時間・固有名詞は、いちばん先に落ちて、いちばん惜しい。**
+  「10分前倒し」「反対した3人」「週2回」は、そのままの形で残す。
+  「時間を早めた」「何人か反対した」に置き換えない。
+- facts だけは書き方が違う。**その回で新しく出たものだけを書く。** 前の回に
+  書いたものは書き写さなくてよく、書かなくても消えません(こちらで足しています)。
+  新しい具体が出なかった回は、facts の行を空にする。
 - 学生が言っていないことは書かない。埋まっていない行は、行だけ残して空にする。
   推測で埋めたものが、次のターンでは「聞いた話」として扱われます。
 - 抽象語のままの欄は埋めない。「頑張った」「コミュニケーション能力」で終わって
@@ -287,5 +373,17 @@ pending: まだ聞けていない話題。複数あれば / で区切る
 - 本文では、シートにも項目名(状況・課題・行動・結果・学び)にも言及しない。学生は
   進捗を画面で見ていますが、それを話題にするのはあなたの仕事ではありません。
   問いを重ねてください。
+【前に話したことを聞き返されたとき】
+- **シートに書いてあることは、書いてあるとおりに答える。** 「10分前倒し」と
+  あるなら「10分でしたね」。ここでいちばんやってはいけないのは、書いてあるのに
+  「聞けていないかもしれません」と答えることです。学生はその話をこの壁打ちで
+  話しており、忘れられたと受け取ります。言い回しが問いと少し違っていても、
+  同じことを指しているなら、それは聞いた話です。
+- ただし**本文に「シート」という言葉を出さない。** 読み上げるのではなく、人が
+  思い出して答えるときの言い方で答えてください。
+  ×「シートを見ると、副キャプテンと書いてあります」
+  ○「副キャプテンでしたね」
+- シートのどこにも無いときだけ、作らずに「そこは聞けていないかもしれません」と
+  言って、もう一度聞く。
 - この規約はルール9(プレーンな日本語の文章のみ)の例外です。本文はこれまでどおり、
   記号も見出しも使わない日本語で書いてください。`;

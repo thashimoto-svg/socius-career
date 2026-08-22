@@ -26,6 +26,7 @@ import { progressComplete, PROGRESS_STEPS, toProgress } from "../prompts/progres
 import { readReply, stripReply } from "../prompts/reply.ts";
 import {
   EMPTY_WORKSHEET,
+  FACTS_MAX,
   isWorksheetEmpty,
   mergeWorksheet,
   parseWorksheet,
@@ -83,6 +84,7 @@ action:
 result:
 learning:
 motive:
+facts: 週4回のシフト / 2年間
 pending: 高校の部活の話
 [/sheet]`;
 
@@ -174,12 +176,44 @@ const cleared = mergeWorksheet(
 );
 eq("空のpending行は「回収済み」として消す", cleared.pending, []);
 
+// facts だけが足し算。20往復の検証で、書き直しのたびに数字が薄れていくのを
+// 見たあとに足した欄なので、「書き直されない」ことがそのまま性質になっている。
+eq("具体は前の回のものが残る", first.facts, ["週4回のシフト", "2年間"]);
+const grown = mergeWorksheet(
+  first,
+  parseWorksheet("[sheet]\nepisode: 居酒屋のホールでの2年間\nfacts: 提供時間が半分に\n[/sheet]"),
+);
+eq("新しい具体は足される", grown.facts, ["週4回のシフト", "2年間", "提供時間が半分に"]);
+eq(
+  "同じ具体を二度は持たない",
+  mergeWorksheet(
+    grown,
+    parseWorksheet("[sheet]\nepisode: 居酒屋のホールでの2年間\nfacts: 週4回のシフト / 新しい話\n[/sheet]"),
+  ).facts,
+  ["週4回のシフト", "2年間", "提供時間が半分に", "新しい話"],
+);
+eq(
+  "書かなかった回でも消えない",
+  mergeWorksheet(grown, parseWorksheet("[sheet]\nepisode: 居酒屋のホールでの2年間\nfacts:\n[/sheet]")).facts,
+  grown.facts,
+);
+check(
+  "上限を超えては持たない",
+  mergeWorksheet(
+    EMPTY_WORKSHEET,
+    parseWorksheet(
+      `[sheet]\nfacts: ${Array.from({ length: 20 }, (_, i) => `事実${i}`).join(" / ")}\n[/sheet]`,
+    ),
+  ).facts.length === FACTS_MAX,
+);
+
 const switched = mergeWorksheet(
   second,
   parseWorksheet("[sheet]\nepisode: 高校のサッカー部\nsituation: 高校3年、副キャプテン\n[/sheet]"),
 );
 eq("エピソードが変われば前の行動は残らない", switched.action, "");
 eq("エピソードが変われば新しい状況が入る", switched.situation, "高校3年、副キャプテン");
+eq("エピソードが変われば具体も入れ替わる", switched.facts, []);
 eq("更新が無い回は何も動かない", mergeWorksheet(second, null), second);
 
 // ---------------------------------------------------------------------------
@@ -277,9 +311,39 @@ check(
   "毎回全部書けと書いてある",
   WORKSHEET_PROTOCOL.includes("毎回、全部の行を書く"),
 );
+// 20往復の検証(npm run verify:memory)で最初に落ちたのは数字だった。書き写せと
+// 言うだけでは足りず、何が落ちるのかを名指しする必要があった。
+check(
+  "書き写せと書いてある(要約し直させない)",
+  WORKSHEET_PROTOCOL.includes("一字一句そのまま書き写す"),
+);
+check(
+  "落ちやすいものが名指しされている",
+  WORKSHEET_PROTOCOL.includes("数字・人数・時間・固有名詞"),
+);
+check(
+  "facts だけは新しいぶんだけと書いてある",
+  WORKSHEET_PROTOCOL.includes("その回で新しく出たものだけを書く"),
+);
+check(
+  "書いてあることは答えると書いてある",
+  WORKSHEET_PROTOCOL.includes("書いてあるとおりに答える"),
+);
+check(
+  "シートを見て答えたことを学生に言わない",
+  WORKSHEET_PROTOCOL.includes("という言葉を出さない") &&
+    WORKSHEET_PROTOCOL.includes("○「副キャプテンでしたね」"),
+);
 check(
   "同封されるシートは記憶だと名乗っている",
   worksheetPrompt(second).includes("この壁打ちの記憶"),
+);
+// 同じ指示がシステムプロンプトにもある。二重なのは意図的で、20往復の検証では
+// 遠いほうだけでは足りなかった——聞き返しに答えるかどうかを決めているのは、
+// 問いのすぐ隣にあるこの一行のほう。
+check(
+  "聞き返しに答えろと、問いの隣でも言っている",
+  worksheetPrompt(second).includes("書いてあるとおりに答えてください"),
 );
 check(
   "空のシートでも何か言う",

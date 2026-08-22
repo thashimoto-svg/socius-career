@@ -66,6 +66,7 @@ const SHEET = {
   result: "提供時間が半分になった",
   learning: "やってみせるのが早いと分かった",
   motive: "困っている人がそのままなのが落ち着かない",
+  facts: ["ドリンク提供時間が半分に", "週4回のシフト"],
   pending: ["高校の部活の話"],
 };
 
@@ -395,6 +396,16 @@ await ok("未回収メモが7件は弾かれる", () =>
   assertFails(
     updateDoc(doc(mine(), sessionPath()), {
       worksheet: { ...SHEET, pending: ["1", "2", "3", "4", "5", "6", "7"] },
+    }),
+  ),
+);
+
+await fresh();
+await seedSession();
+await ok("具体が13件は弾かれる", () =>
+  assertFails(
+    updateDoc(doc(mine(), sessionPath()), {
+      worksheet: { ...SHEET, facts: Array.from({ length: 13 }, (_, i) => `事実${i}`) },
     }),
   ),
 );

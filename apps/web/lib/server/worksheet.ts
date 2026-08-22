@@ -66,6 +66,7 @@ function worksheetValue(sheet: Worksheet): FirestoreValue {
         result: { stringValue: sheet.result },
         learning: { stringValue: sheet.learning },
         motive: { stringValue: sheet.motive },
+        facts: stringsValue(sheet.facts),
         pending: stringsValue(sheet.pending),
       },
     },
